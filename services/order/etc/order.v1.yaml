@@ -1,0 +1,24 @@
+# order rpc service — local dev config. Production values are supplied by
+# a Kubernetes ConfigMap/Secret and an Etcd/DNS endpoint inside the cluster,
+# never by this file. See docs/TZ.md §7.1, deploy/docker-compose.yml.
+Name: order.rpc
+ListenOn: 0.0.0.0:8083
+Etcd:
+  Hosts:
+  - 127.0.0.1:2379
+  Key: order.rpc
+Timeout: 3000
+
+Postgres:
+  DataSource: postgres://qrmenu:qrmenu@127.0.0.1:5437/order_db?sslmode=disable
+
+CatalogRpc:
+  Etcd:
+    Hosts:
+    - 127.0.0.1:2379
+    Key: catalog.rpc
+  NonBlock: true
+  Timeout: 800   # rpc->rpc budget per docs/TZ.md §7.4
+
+KafkaBrokers:
+- 127.0.0.1:9092

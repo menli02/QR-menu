@@ -1,0 +1,312 @@
+syntax = "proto3";
+
+// OrderService owns TableSession, GuestSession, Order, OrderItem,
+// ServiceRequest and Bill. The transactional core; correctness-critical,
+// isolated failure domain. See docs/TZ.md §6, §7.1, §7.2.
+package order.v1;
+
+option go_package = "github.com/menli02/QR-menu/proto/order/v1;v1_orderpb";
+
+import "google/protobuf/timestamp.proto";
+
+service OrderService {
+  // ---- Guest ----
+
+  // CreateOrder is idempotent on idempotency_key (scoped to venue_id).
+  // Internally the order service calls catalog.ResolveOrderItems to price
+  // and validate availability before committing (docs/TZ.md §7.2).
+  rpc CreateOrder(CreateOrderRequest) returns (Order);
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc GetBill(GetBillRequest) returns (Bill);
+
+  rpc CreateServiceRequest(CreateServiceRequestRequest) returns (ServiceRequest);
+
+  // ---- Staff: KDS / floor ----
+
+  rpc TransitionOrder(TransitionOrderRequest) returns (Order);
+  rpc TransitionOrderItem(TransitionOrderItemRequest) returns (Order);
+  rpc ListTickets(ListTicketsRequest) returns (ListTicketsResponse);
+
+  rpc GetTableSession(GetTableSessionRequest) returns (TableSession);
+  rpc ListActiveTableSessions(ListActiveTableSessionsRequest) returns (ListActiveTableSessionsResponse);
+  rpc CloseTableSession(CloseTableSessionRequest) returns (TableSession);
+
+  rpc ListServiceRequests(ListServiceRequestsRequest) returns (ListServiceRequestsResponse);
+  rpc TransitionServiceRequest(TransitionServiceRequestRequest) returns (ServiceRequest);
+
+  // ---- Admin ----
+
+  rpc GetDayReport(GetDayReportRequest) returns (DayReport);
+}
+
+// ---- Shared value types ----
+
+message Money {
+  int64 amount_minor = 1;
+  string currency = 2;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PLACED = 1;
+  ORDER_STATUS_ACCEPTED = 2;
+  ORDER_STATUS_IN_PROGRESS = 3;
+  ORDER_STATUS_READY = 4;
+  ORDER_STATUS_SERVED = 5;
+  ORDER_STATUS_CANCELLED = 6;
+}
+
+enum OrderItemStatus {
+  ORDER_ITEM_STATUS_UNSPECIFIED = 0;
+  ORDER_ITEM_STATUS_PLACED = 1;
+  ORDER_ITEM_STATUS_COOKING = 2;
+  ORDER_ITEM_STATUS_READY = 3;
+  ORDER_ITEM_STATUS_CANCELLED = 4;
+}
+
+enum TableSessionStatus {
+  TABLE_SESSION_STATUS_UNSPECIFIED = 0;
+  TABLE_SESSION_STATUS_OPEN = 1;
+  TABLE_SESSION_STATUS_CLOSED = 2;
+}
+
+enum ServiceRequestType {
+  SERVICE_REQUEST_TYPE_UNSPECIFIED = 0;
+  SERVICE_REQUEST_TYPE_CALL_WAITER = 1;
+  SERVICE_REQUEST_TYPE_REQUEST_BILL = 2;
+}
+
+enum ServiceRequestStatus {
+  SERVICE_REQUEST_STATUS_UNSPECIFIED = 0;
+  SERVICE_REQUEST_STATUS_OPEN = 1;
+  SERVICE_REQUEST_STATUS_ACKNOWLEDGED = 2;
+  SERVICE_REQUEST_STATUS_RESOLVED = 3;
+  SERVICE_REQUEST_STATUS_EXPIRED = 4;
+}
+
+enum PaymentMethod {
+  PAYMENT_METHOD_UNSPECIFIED = 0;
+  PAYMENT_METHOD_CASH = 1;
+  PAYMENT_METHOD_CARD_TERMINAL = 2;
+  PAYMENT_METHOD_OTHER = 3;
+}
+
+// ---- Entities ----
+
+message OrderItemModifier {
+  string option_id = 1;
+  string name = 2;       // denormalized snapshot, immutable after order placed
+  Money price_delta = 3; // snapshot
+}
+
+message OrderItem {
+  string id = 1;
+  string menu_item_id = 2;
+  string name = 3;        // denormalized snapshot
+  Money unit_price = 4;   // snapshot
+  int32 qty = 5;
+  repeated OrderItemModifier modifiers = 6;
+  string comment = 7;
+  OrderItemStatus status = 8;
+  int64 line_total_minor = 9;
+}
+
+message Order {
+  string id = 1;
+  string venue_id = 2;
+  string table_id = 3;
+  string table_session_id = 4;
+  string guest_session_id = 5;
+  string number = 6;       // per-venue, per-business-day human number, e.g. "A-014"
+  OrderStatus status = 7;
+  repeated OrderItem items = 8;
+  int64 total_minor = 9;
+  string currency = 10;
+  string menu_version = 11;
+  google.protobuf.Timestamp placed_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message TableSession {
+  string id = 1;
+  string venue_id = 2;
+  string table_id = 3;
+  TableSessionStatus status = 4;
+  google.protobuf.Timestamp opened_at = 5;
+  google.protobuf.Timestamp closed_at = 6;
+  string closed_by_staff_id = 7;
+  PaymentMethod payment_method = 8;
+  int64 total_minor = 9;
+  string currency = 10;
+}
+
+message ServiceRequest {
+  string id = 1;
+  string venue_id = 2;
+  string table_id = 3;
+  string table_session_id = 4;
+  ServiceRequestType type = 5;
+  ServiceRequestStatus status = 6;
+  string note = 7; // e.g. preferred payment method hint (FR-S7)
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp acknowledged_at = 9;
+  google.protobuf.Timestamp resolved_at = 10;
+}
+
+message BillLineItem {
+  string order_id = 1;
+  string menu_item_id = 2;
+  string name = 3;
+  int32 qty = 4;
+  Money unit_price = 5;
+  int64 line_total_minor = 6;
+}
+
+message Bill {
+  string table_session_id = 1;
+  string venue_id = 2;
+  repeated BillLineItem line_items = 3;
+  int64 subtotal_minor = 4;
+  int32 service_charge_bps = 5;
+  int64 service_charge_minor = 6;
+  int64 total_minor = 7;
+  string currency = 8;
+}
+
+message TopItem {
+  string menu_item_id = 1;
+  string name = 2;
+  int32 qty_sold = 3;
+  int64 revenue_minor = 4;
+}
+
+message DayReport {
+  string venue_id = 1;
+  string business_date = 2; // YYYY-MM-DD, venue-local business day
+  int32 orders_count = 3;
+  int64 revenue_minor = 4;
+  string currency = 5;
+  int64 average_ticket_minor = 6;
+  repeated TopItem top_items = 7;
+  double average_accept_seconds = 8;
+  double average_cook_seconds = 9;
+}
+
+// ---- CreateOrder ----
+
+message OrderItemRequest {
+  string item_id = 1;
+  int32 qty = 2;
+  repeated string modifier_option_ids = 3;
+  string comment = 4;
+}
+
+message CreateOrderRequest {
+  string venue_id = 1;
+  string table_id = 2;
+  string guest_session_id = 3;
+  string idempotency_key = 4;
+  string locale = 5;
+  repeated OrderItemRequest items = 6;
+}
+
+// ---- ListOrders / GetBill ----
+
+message ListOrdersRequest {
+  string venue_id = 1;
+  string table_session_id = 2;
+}
+message ListOrdersResponse {
+  repeated Order orders = 1;
+}
+
+message GetBillRequest {
+  string venue_id = 1;
+  string table_session_id = 2;
+}
+
+// ---- Transitions ----
+
+message TransitionOrderRequest {
+  string venue_id = 1;
+  string order_id = 2;
+  OrderStatus to = 3;
+  string reason = 4;
+  string actor_staff_id = 5;  // empty when the actor is the placing guest (self-cancel)
+  string idempotency_key = 6;
+}
+
+message TransitionOrderItemRequest {
+  string venue_id = 1;
+  string order_id = 2;
+  string order_item_id = 3;
+  OrderItemStatus to = 4;
+  string reason = 5;
+  string actor_staff_id = 6;
+  string idempotency_key = 7;
+}
+
+// ---- Tickets / table sessions ----
+
+message ListTicketsRequest {
+  string venue_id = 1;
+  repeated OrderStatus status_filter = 2; // empty = active (placed..ready)
+  string cursor = 3;
+  int32 page_size = 4;
+}
+message ListTicketsResponse {
+  repeated Order orders = 1;
+  string next_cursor = 2;
+}
+
+message GetTableSessionRequest {
+  string venue_id = 1;
+  string table_id = 2;
+}
+
+message ListActiveTableSessionsRequest {
+  string venue_id = 1;
+}
+message ListActiveTableSessionsResponse {
+  repeated TableSession sessions = 1;
+}
+
+message CloseTableSessionRequest {
+  string venue_id = 1;
+  string table_session_id = 2;
+  PaymentMethod payment_method = 3;
+  string actor_staff_id = 4;
+}
+
+// ---- Service requests ----
+
+message CreateServiceRequestRequest {
+  string venue_id = 1;
+  string table_id = 2;
+  string table_session_id = 3;
+  ServiceRequestType type = 4;
+  string note = 5;
+  string idempotency_key = 6;
+}
+
+message ListServiceRequestsRequest {
+  string venue_id = 1;
+  repeated ServiceRequestStatus status_filter = 2; // empty = open
+}
+message ListServiceRequestsResponse {
+  repeated ServiceRequest requests = 1;
+}
+
+message TransitionServiceRequestRequest {
+  string venue_id = 1;
+  string service_request_id = 2;
+  ServiceRequestStatus to = 3;
+  string actor_staff_id = 4;
+}
+
+// ---- Reporting ----
+
+message GetDayReportRequest {
+  string venue_id = 1;
+  string business_date = 2; // YYYY-MM-DD
+}

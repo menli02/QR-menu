@@ -1,0 +1,37 @@
+# gateway rest service — local dev config. Production values are supplied
+# by a Kubernetes ConfigMap/Secret; the only publicly-exposed component
+# (docs/TZ.md §7.1). See deploy/docker-compose.yml.
+Name: gateway-api
+Host: 0.0.0.0
+Port: 8888
+Timeout: 10000   # browser->gateway budget, docs/TZ.md §7.4
+
+CatalogRpc:
+  Etcd:
+    Hosts:
+    - 127.0.0.1:2379
+    Key: catalog.rpc
+  NonBlock: true
+  Timeout: 3000  # gateway->rpc budget, docs/TZ.md §7.4
+
+OrderRpc:
+  Etcd:
+    Hosts:
+    - 127.0.0.1:2379
+    Key: order.rpc
+  NonBlock: true
+  Timeout: 3000
+
+IdentityRpc:
+  Etcd:
+    Hosts:
+    - 127.0.0.1:2379
+    Key: identity.rpc
+  NonBlock: true
+  Timeout: 3000
+
+Redis:
+  Host: 127.0.0.1:6379
+  Type: node
+
+JWKSRefreshSeconds: 300

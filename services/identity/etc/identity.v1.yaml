@@ -1,0 +1,21 @@
+# identity rpc service — local dev config. Production values are supplied
+# by a Kubernetes ConfigMap/Secret and an Etcd/DNS endpoint inside the
+# cluster, never by this file. See docs/TZ.md §7.1, §11, deploy/docker-compose.yml.
+Name: identity.rpc
+ListenOn: 0.0.0.0:8081
+Etcd:
+  Hosts:
+  - 127.0.0.1:2379
+  Key: identity.rpc
+Timeout: 3000
+
+Postgres:
+  DataSource: postgres://qrmenu:qrmenu@127.0.0.1:5437/identity_db?sslmode=disable
+
+# AccessSecret below is a throwaway local-dev value, not a real secret.
+# Never put a production signing key in a committed config file.
+JWT:
+  AccessSecret: dev-only-change-me
+  AccessExpireSeconds: 900       # staff access token, 15 min
+  RefreshExpireSeconds: 604800   # staff refresh token, 7 days
+  GuestTokenTTLSeconds: 14400    # guest token, 4h sliding (FR-O1)

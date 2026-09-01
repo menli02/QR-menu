@@ -1,0 +1,22 @@
+# Go
+/bin/
+*.exe
+*.test
+*.out
+
+# Local env / secrets — never commit real credentials (see docs/TZ.md §1.1 R5)
+.env
+.env.*
+*.local.yaml
+
+# Node / web
+node_modules/
+web/*/dist/
+web/*/build/
+web/*/.next/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

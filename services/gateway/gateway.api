@@ -1,0 +1,709 @@
+syntax = "v1"
+
+info (
+	title:   "QR Menu Gateway API"
+	desc:    "Public REST + WebSocket edge for QR Menu — the only component exposed publicly. See docs/TZ.md §7.1, §8.1."
+	author:  "menli"
+	version: "v1"
+)
+
+// NOT in this file, by design — the goctl .api DSL only expresses JSON
+// request/response routes:
+//   WS   /ws/guest, /ws/staff        — registered manually in gateway.go (raw net/http upgrade)
+//   GET  /admin/tables/qr.pdf        — registered manually in gateway.go (raw binary response)
+// See internal/svc and gateway.go for where those are wired.
+// ===========================================================================
+// Shared types
+// ===========================================================================
+type Money {
+	AmountMinor int64  `json:"amountMinor"`
+	Currency    string `json:"currency"`
+}
+
+type ModifierOption {
+	Id         string `json:"id"`
+	Name       string `json:"name"`
+	PriceDelta Money  `json:"priceDelta"`
+}
+
+type ModifierGroup {
+	Id        string           `json:"id"`
+	Name      string           `json:"name"`
+	MinSelect int32            `json:"minSelect"`
+	MaxSelect int32            `json:"maxSelect"`
+	Required  bool             `json:"required"`
+	Options   []ModifierOption `json:"options"`
+}
+
+type MenuItem {
+	Id             string          `json:"id"`
+	CategoryId     string          `json:"categoryId"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	BasePrice      Money           `json:"basePrice"`
+	ImageUrl       string          `json:"imageUrl"`
+	Allergens      []string        `json:"allergens"`
+	IsAvailable    bool            `json:"isAvailable"`
+	SortOrder      int32           `json:"sortOrder"`
+	ModifierGroups []ModifierGroup `json:"modifierGroups"`
+}
+
+type MenuCategory {
+	Id        string     `json:"id"`
+	Name      string     `json:"name"`
+	SortOrder int32      `json:"sortOrder"`
+	Items     []MenuItem `json:"items"`
+}
+
+type Hall {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder"`
+	IsActive  bool   `json:"isActive"`
+}
+
+type Table {
+	Id         string `json:"id"`
+	HallId     string `json:"hallId"`
+	Label      string `json:"label"`
+	Seats      int32  `json:"seats"`
+	IsActive   bool   `json:"isActive"`
+	TableCode  string `json:"tableCode"`
+	KeyVersion int32  `json:"keyVersion"`
+}
+
+type Category {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder"`
+	IsVisible bool   `json:"isVisible"`
+	ImageUrl  string `json:"imageUrl"`
+}
+
+type VenueSettings {
+	VenueId                  string   `json:"venueId"`
+	Name                     string   `json:"name"`
+	LogoUrl                  string   `json:"logoUrl"`
+	Currency                 string   `json:"currency"`
+	Locales                  []string `json:"locales"`
+	DefaultLocale            string   `json:"defaultLocale"`
+	Timezone                 string   `json:"timezone"`
+	ServiceChargeBps         int32    `json:"serviceChargeBps"`
+	CancelWindowSeconds      int32    `json:"cancelWindowSeconds"`
+	KdsAmberThresholdSeconds int32    `json:"kdsAmberThresholdSeconds"`
+	KdsRedThresholdSeconds   int32    `json:"kdsRedThresholdSeconds"`
+}
+
+type Staff {
+	Id       string `json:"id"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Role     string `json:"role"` // admin | manager | waiter | cook
+	IsActive bool   `json:"isActive"`
+}
+
+type OrderItemModifier {
+	OptionId   string `json:"optionId"`
+	Name       string `json:"name"`
+	PriceDelta Money  `json:"priceDelta"`
+}
+
+type OrderItem {
+	Id             string              `json:"id"`
+	MenuItemId     string              `json:"menuItemId"`
+	Name           string              `json:"name"`
+	UnitPrice      Money               `json:"unitPrice"`
+	Qty            int32               `json:"qty"`
+	Modifiers      []OrderItemModifier `json:"modifiers"`
+	Comment        string              `json:"comment"`
+	Status         string              `json:"status"`
+	LineTotalMinor int64               `json:"lineTotalMinor"`
+}
+
+type Order {
+	Id             string      `json:"id"`
+	TableId        string      `json:"tableId"`
+	TableSessionId string      `json:"tableSessionId"`
+	Number         string      `json:"number"`
+	Status         string      `json:"status"`
+	Items          []OrderItem `json:"items"`
+	TotalMinor     int64       `json:"totalMinor"`
+	Currency       string      `json:"currency"`
+	PlacedAt       string      `json:"placedAt"`
+	UpdatedAt      string      `json:"updatedAt"`
+}
+
+type TableSession {
+	Id            string `json:"id"`
+	TableId       string `json:"tableId"`
+	Status        string `json:"status"`
+	OpenedAt      string `json:"openedAt"`
+	ClosedAt      string `json:"closedAt,omitempty"`
+	PaymentMethod string `json:"paymentMethod,omitempty"`
+	TotalMinor    int64  `json:"totalMinor"`
+	Currency      string `json:"currency"`
+}
+
+type ServiceRequest {
+	Id             string `json:"id"`
+	TableId        string `json:"tableId"`
+	TableSessionId string `json:"tableSessionId"`
+	Type           string `json:"type"` // call_waiter | request_bill
+	Status         string `json:"status"` // open | acknowledged | resolved | expired
+	Note           string `json:"note,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+type BillLineItem {
+	Name           string `json:"name"`
+	Qty            int32  `json:"qty"`
+	UnitPrice      Money  `json:"unitPrice"`
+	LineTotalMinor int64  `json:"lineTotalMinor"`
+}
+
+type Bill {
+	TableSessionId     string         `json:"tableSessionId"`
+	LineItems          []BillLineItem `json:"lineItems"`
+	SubtotalMinor      int64          `json:"subtotalMinor"`
+	ServiceChargeBps   int32          `json:"serviceChargeBps"`
+	ServiceChargeMinor int64          `json:"serviceChargeMinor"`
+	TotalMinor         int64          `json:"totalMinor"`
+	Currency           string         `json:"currency"`
+}
+
+type TopItem {
+	Name         string `json:"name"`
+	QtySold      int32  `json:"qtySold"`
+	RevenueMinor int64  `json:"revenueMinor"`
+}
+
+type DayReport {
+	BusinessDate         string    `json:"businessDate"`
+	OrdersCount          int32     `json:"ordersCount"`
+	RevenueMinor         int64     `json:"revenueMinor"`
+	Currency             string    `json:"currency"`
+	AverageTicketMinor   int64     `json:"averageTicketMinor"`
+	TopItems             []TopItem `json:"topItems"`
+	AverageAcceptSeconds float64   `json:"averageAcceptSeconds"`
+	AverageCookSeconds   float64   `json:"averageCookSeconds"`
+}
+
+// ===========================================================================
+// Guest — auth: guest JWT (Authorization: Bearer), except session exchange.
+// docs/TZ.md §8.1 "Guest"
+// ===========================================================================
+type ExchangeGuestSessionReq {
+	VenueSlug string `json:"venueSlug"`
+	TableCode string `json:"tableCode"`
+	Sig       string `json:"sig"`
+}
+
+type ExchangeGuestSessionResp {
+	AccessToken    string `json:"accessToken"`
+	TokenType      string `json:"tokenType"`
+	ExpiresAt      string `json:"expiresAt"`
+	VenueId        string `json:"venueId"`
+	TableId        string `json:"tableId"`
+	GuestSessionId string `json:"guestSessionId"`
+}
+
+type GetGuestMenuReq {
+	Locale string `form:"locale,optional"`
+}
+
+type GetGuestMenuResp {
+	VenueId     string         `json:"venueId"`
+	MenuVersion string         `json:"menuVersion"`
+	Currency    string         `json:"currency"`
+	Categories  []MenuCategory `json:"categories"`
+}
+
+type OrderItemReq {
+	ItemId            string   `json:"itemId"`
+	Qty               int32    `json:"qty"`
+	ModifierOptionIds []string `json:"modifierOptionIds,optional"`
+	Comment           string   `json:"comment,optional"`
+}
+
+type CreateGuestOrderReq {
+	Items []OrderItemReq `json:"items"`
+}
+
+type ListGuestOrdersResp {
+	Orders []Order `json:"orders"`
+}
+
+type CancelGuestOrderReq {
+	Id     string `path:"id"`
+	Reason string `json:"reason,optional"`
+}
+
+type CreateGuestServiceRequestReq {
+	Type string `json:"type"` // call_waiter | request_bill
+	Note string `json:"note,optional"`
+}
+
+// ===========================================================================
+// Staff auth — session lifecycle. docs/TZ.md §8.1 "Staff"
+// ===========================================================================
+type LoginReq {
+	VenueSlug string `json:"venueSlug"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+}
+
+type TokenResp {
+	AccessToken           string `json:"accessToken"`
+	RefreshToken          string `json:"refreshToken"`
+	TokenType             string `json:"tokenType"`
+	AccessTokenExpiresAt  string `json:"accessTokenExpiresAt"`
+	RefreshTokenExpiresAt string `json:"refreshTokenExpiresAt"`
+}
+
+type RefreshReq {
+	RefreshToken string `json:"refreshToken"`
+}
+
+type LogoutReq {
+	RefreshToken string `json:"refreshToken"`
+}
+
+type LogoutResp {
+	Revoked bool `json:"revoked"`
+}
+
+// ===========================================================================
+// KDS / floor — auth: staff JWT. docs/TZ.md §8.1 "Staff"
+// ===========================================================================
+type ListTicketsReq {
+	Status string `form:"status,optional"` // active (default) | all
+}
+
+type ListTicketsResp {
+	Orders []Order `json:"orders"`
+}
+
+type TransitionOrderReq {
+	Id     string `path:"id"`
+	To     string `json:"to"`
+	Reason string `json:"reason,optional"`
+}
+
+type TransitionOrderItemReq {
+	Id     string `path:"id"`
+	To     string `json:"to"`
+	Reason string `json:"reason,optional"`
+}
+
+type SetItemAvailabilityReq {
+	ItemId      string `path:"itemId"`
+	IsAvailable bool   `json:"isAvailable"`
+}
+
+type ListServiceRequestsReq {
+	Status string `form:"status,optional"` // open (default) | all
+}
+
+type ListServiceRequestsResp {
+	Requests []ServiceRequest `json:"requests"`
+}
+
+type TransitionServiceRequestReq {
+	Id string `path:"id"`
+	To string `json:"to"`
+}
+
+type ListFloorTablesResp {
+	Tables []Table `json:"tables"`
+}
+
+type GetTableSessionBillReq {
+	Id string `path:"id"`
+}
+
+type CloseTableSessionReq {
+	Id            string `path:"id"`
+	PaymentMethod string `json:"paymentMethod"` // cash | card_terminal | other
+}
+
+// ===========================================================================
+// Admin — auth: staff JWT, role manager/admin. docs/TZ.md §8.1 "Admin"
+// Write bodies edit one locale's text at a time; the underlying catalog
+// aggregate stores the full per-locale map (docs/TZ.md §6).
+// ===========================================================================
+type UpdateVenueSettingsReq {
+	Name                     string   `json:"name"`
+	LogoUrl                  string   `json:"logoUrl,optional"`
+	Currency                 string   `json:"currency"`
+	Locales                  []string `json:"locales"`
+	DefaultLocale            string   `json:"defaultLocale"`
+	Timezone                 string   `json:"timezone"`
+	ServiceChargeBps         int32    `json:"serviceChargeBps"`
+	CancelWindowSeconds      int32    `json:"cancelWindowSeconds"`
+	KdsAmberThresholdSeconds int32    `json:"kdsAmberThresholdSeconds"`
+	KdsRedThresholdSeconds   int32    `json:"kdsRedThresholdSeconds"`
+}
+
+type ListHallsResp {
+	Halls []Hall `json:"halls"`
+}
+
+type CreateHallReq {
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder,optional"`
+}
+
+type UpdateHallReq {
+	Id        string `path:"id"`
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder"`
+	IsActive  bool   `json:"isActive"`
+}
+
+type DeleteHallReq {
+	Id string `path:"id"`
+}
+
+type DeletedResp {
+	Deleted bool `json:"deleted"`
+}
+
+type ListTablesReq {
+	HallId   string `form:"hallId,optional"`
+	Cursor   string `form:"cursor,optional"`
+	PageSize int32  `form:"pageSize,optional"`
+}
+
+type ListTablesResp {
+	Tables     []Table `json:"tables"`
+	NextCursor string  `json:"nextCursor"`
+}
+
+type CreateTableReq {
+	HallId string `json:"hallId"`
+	Label  string `json:"label"`
+	Seats  int32  `json:"seats,optional"`
+}
+
+type UpdateTableReq {
+	Id       string `path:"id"`
+	HallId   string `json:"hallId"`
+	Label    string `json:"label"`
+	Seats    int32  `json:"seats"`
+	IsActive bool   `json:"isActive"`
+}
+
+type DeleteTableReq {
+	Id string `path:"id"`
+}
+
+type RotateVenueQrKeyResp {
+	NewKeyVersion        int32  `json:"newKeyVersion"`
+	PreviousKeyVersion   int32  `json:"previousKeyVersion"`
+	PreviousKeyExpiresAt string `json:"previousKeyExpiresAt"`
+}
+
+type ListCategoriesResp {
+	Categories []Category `json:"categories"`
+}
+
+type CreateCategoryReq {
+	Locale    string `json:"locale"`
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder,optional"`
+	IsVisible bool   `json:"isVisible,optional"`
+	ImageUrl  string `json:"imageUrl,optional"`
+}
+
+type UpdateCategoryReq {
+	Id        string `path:"id"`
+	Locale    string `json:"locale"`
+	Name      string `json:"name"`
+	SortOrder int32  `json:"sortOrder"`
+	IsVisible bool   `json:"isVisible"`
+	ImageUrl  string `json:"imageUrl,optional"`
+}
+
+type DeleteCategoryReq {
+	Id string `path:"id"`
+}
+
+type ListMenuItemsReq {
+	CategoryId string `form:"categoryId,optional"`
+	Cursor     string `form:"cursor,optional"`
+	PageSize   int32  `form:"pageSize,optional"`
+}
+
+type ListMenuItemsResp {
+	Items      []MenuItem `json:"items"`
+	NextCursor string     `json:"nextCursor"`
+}
+
+type CreateMenuItemReq {
+	CategoryId  string   `json:"categoryId"`
+	Locale      string   `json:"locale"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,optional"`
+	BasePrice   Money    `json:"basePrice"`
+	ImageUrl    string   `json:"imageUrl,optional"`
+	Allergens   []string `json:"allergens,optional"`
+	SortOrder   int32    `json:"sortOrder,optional"`
+}
+
+type UpdateMenuItemReq {
+	Id          string   `path:"id"`
+	CategoryId  string   `json:"categoryId"`
+	Locale      string   `json:"locale"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,optional"`
+	BasePrice   Money    `json:"basePrice"`
+	ImageUrl    string   `json:"imageUrl,optional"`
+	Allergens   []string `json:"allergens,optional"`
+	IsActive    bool     `json:"isActive"`
+	SortOrder   int32    `json:"sortOrder"`
+}
+
+type DeleteMenuItemReq {
+	Id string `path:"id"`
+}
+
+type CreateModifierGroupReq {
+	ItemId    string           `path:"itemId"`
+	Locale    string           `json:"locale"`
+	Name      string           `json:"name"`
+	MinSelect int32            `json:"minSelect"`
+	MaxSelect int32            `json:"maxSelect"`
+	Required  bool             `json:"required"`
+	Options   []ModifierOption `json:"options,optional"`
+}
+
+type UpdateModifierGroupReq {
+	ItemId    string           `path:"itemId"`
+	GroupId   string           `path:"groupId"`
+	Locale    string           `json:"locale"`
+	Name      string           `json:"name"`
+	MinSelect int32            `json:"minSelect"`
+	MaxSelect int32            `json:"maxSelect"`
+	Required  bool             `json:"required"`
+	Options   []ModifierOption `json:"options,optional"`
+}
+
+type DeleteModifierGroupReq {
+	ItemId  string `path:"itemId"`
+	GroupId string `path:"groupId"`
+}
+
+type ListStaffReq {
+	Cursor   string `form:"cursor,optional"`
+	PageSize int32  `form:"pageSize,optional"`
+}
+
+type ListStaffResp {
+	Staff      []Staff `json:"staff"`
+	NextCursor string  `json:"nextCursor"`
+}
+
+type CreateStaffReq {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+type UpdateStaffReq {
+	Id       string `path:"id"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	IsActive bool   `json:"isActive"`
+}
+
+type DeleteStaffReq {
+	Id string `path:"id"`
+}
+
+type GetDayReportReq {
+	Date string `form:"date"` // YYYY-MM-DD
+}
+
+// ===========================================================================
+// Routes
+// ===========================================================================
+@server (
+	prefix: /api/v1/guest
+	group:  guest
+)
+service gateway-api {
+	@handler exchangeGuestSession
+	post /sessions (ExchangeGuestSessionReq) returns (ExchangeGuestSessionResp)
+}
+
+@server (
+	prefix:     /api/v1/guest
+	group:      guest
+	middleware: GuestAuth
+)
+service gateway-api {
+	@handler getGuestMenu
+	get /menu (GetGuestMenuReq) returns (GetGuestMenuResp)
+
+	@handler createGuestOrder
+	post /orders (CreateGuestOrderReq) returns (Order)
+
+	@handler listGuestOrders
+	get /orders returns (ListGuestOrdersResp)
+
+	@handler cancelGuestOrder
+	post /orders/:id/cancel (CancelGuestOrderReq) returns (Order)
+
+	@handler getGuestBill
+	get /bill returns (Bill)
+
+	@handler createGuestServiceRequest
+	post /service-requests (CreateGuestServiceRequestReq) returns (ServiceRequest)
+}
+
+@server (
+	prefix: /api/v1/auth
+	group:  auth
+)
+service gateway-api {
+	@handler login
+	post /login (LoginReq) returns (TokenResp)
+
+	@handler refresh
+	post /refresh (RefreshReq) returns (TokenResp)
+
+	@handler logout
+	post /logout (LogoutReq) returns (LogoutResp)
+}
+
+@server (
+	prefix:     /api/v1/kds
+	group:      kds
+	middleware: StaffAuth
+)
+service gateway-api {
+	@handler listTickets
+	get /tickets (ListTicketsReq) returns (ListTicketsResp)
+
+	@handler transitionOrder
+	post /orders/:id/transition (TransitionOrderReq) returns (Order)
+
+	@handler transitionOrderItem
+	post /order-items/:id/transition (TransitionOrderItemReq) returns (Order)
+
+	@handler setItemAvailability
+	post /items/:itemId/availability (SetItemAvailabilityReq) returns (MenuItem)
+}
+
+@server (
+	prefix:     /api/v1/floor
+	group:      floor
+	middleware: StaffAuth
+)
+service gateway-api {
+	@handler listServiceRequests
+	get /service-requests (ListServiceRequestsReq) returns (ListServiceRequestsResp)
+
+	@handler transitionServiceRequest
+	post /service-requests/:id/transition (TransitionServiceRequestReq) returns (ServiceRequest)
+
+	@handler listFloorTables
+	get /tables returns (ListFloorTablesResp)
+
+	@handler getTableSessionBill
+	get /table-sessions/:id/bill (GetTableSessionBillReq) returns (Bill)
+
+	@handler closeTableSession
+	post /table-sessions/:id/close (CloseTableSessionReq) returns (TableSession)
+}
+
+@server (
+	prefix:     /api/v1/admin
+	group:      admin
+	middleware: StaffAuth
+)
+service gateway-api {
+	@handler getVenueSettings
+	get /venue returns (VenueSettings)
+
+	@handler updateVenueSettings
+	put /venue (UpdateVenueSettingsReq) returns (VenueSettings)
+
+	@handler listHalls
+	get /halls returns (ListHallsResp)
+
+	@handler createHall
+	post /halls (CreateHallReq) returns (Hall)
+
+	@handler updateHall
+	put /halls/:id (UpdateHallReq) returns (Hall)
+
+	@handler deleteHall
+	delete /halls/:id (DeleteHallReq) returns (DeletedResp)
+
+	@handler listTables
+	get /tables (ListTablesReq) returns (ListTablesResp)
+
+	@handler createTable
+	post /tables (CreateTableReq) returns (Table)
+
+	@handler updateTable
+	put /tables/:id (UpdateTableReq) returns (Table)
+
+	@handler deleteTable
+	delete /tables/:id (DeleteTableReq) returns (DeletedResp)
+
+	@handler rotateVenueQrKey
+	post /tables/rotate-qr-key returns (RotateVenueQrKeyResp)
+
+	@handler listCategories
+	get /categories returns (ListCategoriesResp)
+
+	@handler createCategory
+	post /categories (CreateCategoryReq) returns (Category)
+
+	@handler updateCategory
+	put /categories/:id (UpdateCategoryReq) returns (Category)
+
+	@handler deleteCategory
+	delete /categories/:id (DeleteCategoryReq) returns (DeletedResp)
+
+	@handler listMenuItems
+	get /items (ListMenuItemsReq) returns (ListMenuItemsResp)
+
+	@handler createMenuItem
+	post /items (CreateMenuItemReq) returns (MenuItem)
+
+	@handler updateMenuItem
+	put /items/:id (UpdateMenuItemReq) returns (MenuItem)
+
+	@handler deleteMenuItem
+	delete /items/:id (DeleteMenuItemReq) returns (DeletedResp)
+
+	@handler createModifierGroup
+	post /items/:itemId/modifier-groups (CreateModifierGroupReq) returns (ModifierGroup)
+
+	@handler updateModifierGroup
+	put /items/:itemId/modifier-groups/:groupId (UpdateModifierGroupReq) returns (ModifierGroup)
+
+	@handler deleteModifierGroup
+	delete /items/:itemId/modifier-groups/:groupId (DeleteModifierGroupReq) returns (DeletedResp)
+
+	@handler listStaff
+	get /staff (ListStaffReq) returns (ListStaffResp)
+
+	@handler createStaff
+	post /staff (CreateStaffReq) returns (Staff)
+
+	@handler updateStaff
+	put /staff/:id (UpdateStaffReq) returns (Staff)
+
+	@handler deleteStaff
+	delete /staff/:id (DeleteStaffReq) returns (DeletedResp)
+
+	@handler getDayReport
+	get /reports/day (GetDayReportReq) returns (DayReport)
+}
+

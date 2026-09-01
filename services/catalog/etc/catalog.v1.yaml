@@ -1,0 +1,23 @@
+# catalog rpc service — local dev config. Production values are supplied by
+# a Kubernetes ConfigMap/Secret and an Etcd/DNS endpoint inside the cluster,
+# never by this file. See docs/TZ.md §7.1, deploy/docker-compose.yml.
+Name: catalog.rpc
+ListenOn: 0.0.0.0:8082
+Etcd:
+  Hosts:
+  - 127.0.0.1:2379
+  Key: catalog.rpc
+Timeout: 3000
+
+Postgres:
+  DataSource: postgres://qrmenu:qrmenu@127.0.0.1:5437/catalog_db?sslmode=disable
+
+MinIO:
+  Endpoint: 127.0.0.1:9000
+  AccessKey: qrmenu
+  SecretKey: qrmenu-dev-only
+  Bucket: catalog-images
+  UseSSL: false
+
+KafkaBrokers:
+- 127.0.0.1:9092

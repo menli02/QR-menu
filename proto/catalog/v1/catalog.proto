@@ -1,0 +1,418 @@
+syntax = "proto3";
+
+// CatalogService owns Venue, Hall, Table, Category, MenuItem, ModifierGroup
+// and ModifierOption. Read-dominated, aggressively cached. See docs/TZ.md §6, §7.1.
+package catalog.v1;
+
+option go_package = "github.com/menli02/QR-menu/proto/catalog/v1;v1_catalogpb";
+
+import "google/protobuf/timestamp.proto";
+
+service CatalogService {
+  // ---- Guest-facing (called by gateway on behalf of a guest) ----
+
+  // GetMenu returns the full active, visible, in-locale menu for one venue
+  // in a single response. Cacheable by menu_version (docs/TZ.md FR-C5, FR-C6).
+  rpc GetMenu(GetMenuRequest) returns (GetMenuResponse);
+
+  // ResolveOrderItems re-prices and validates availability of requested items
+  // server-side; the client-displayed cart is never trusted (docs/TZ.md FR-O3).
+  rpc ResolveOrderItems(ResolveOrderItemsRequest) returns (ResolveOrderItemsResponse);
+
+  // ResolveTable validates a QR table_code + HMAC signature and returns the
+  // venue/table it maps to (docs/TZ.md FR-T2, FR-T4).
+  rpc ResolveTable(ResolveTableRequest) returns (ResolveTableResponse);
+
+  // ---- Kitchen / floor (staff-facing) ----
+
+  // SetItemAvailability toggles the stop-list ("86") state of a menu item.
+  rpc SetItemAvailability(SetItemAvailabilityRequest) returns (SetItemAvailabilityResponse);
+
+  // ---- Admin (manager/admin role) ----
+
+  rpc GetVenueSettings(GetVenueSettingsRequest) returns (VenueSettings);
+  rpc UpdateVenueSettings(UpdateVenueSettingsRequest) returns (VenueSettings);
+
+  rpc ListHalls(ListHallsRequest) returns (ListHallsResponse);
+  rpc CreateHall(CreateHallRequest) returns (Hall);
+  rpc UpdateHall(UpdateHallRequest) returns (Hall);
+  rpc DeleteHall(DeleteHallRequest) returns (DeleteHallResponse);
+
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+  rpc CreateTable(CreateTableRequest) returns (Table);
+  rpc UpdateTable(UpdateTableRequest) returns (Table);
+  rpc DeleteTable(DeleteTableRequest) returns (DeleteTableResponse);
+  // RotateVenueQRKey issues a new HMAC key_version for QR signing; the
+  // previous version stays valid for the venue's configured grace period
+  // (docs/TZ.md FR-T4).
+  rpc RotateVenueQRKey(RotateVenueQRKeyRequest) returns (RotateVenueQRKeyResponse);
+
+  rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesResponse);
+  rpc CreateCategory(CreateCategoryRequest) returns (Category);
+  rpc UpdateCategory(UpdateCategoryRequest) returns (Category);
+  rpc DeleteCategory(DeleteCategoryRequest) returns (DeleteCategoryResponse);
+
+  rpc ListMenuItems(ListMenuItemsRequest) returns (ListMenuItemsResponse);
+  rpc CreateMenuItem(CreateMenuItemRequest) returns (MenuItem);
+  rpc UpdateMenuItem(UpdateMenuItemRequest) returns (MenuItem);
+  rpc DeleteMenuItem(DeleteMenuItemRequest) returns (DeleteMenuItemResponse);
+
+  rpc CreateModifierGroup(CreateModifierGroupRequest) returns (ModifierGroup);
+  rpc UpdateModifierGroup(UpdateModifierGroupRequest) returns (ModifierGroup);
+  rpc DeleteModifierGroup(DeleteModifierGroupRequest) returns (DeleteModifierGroupResponse);
+}
+
+// ---- Shared value types ----
+
+// Money is always integer minor units plus an ISO-4217 currency code.
+message Money {
+  int64 amount_minor = 1;
+  string currency = 2;
+}
+
+// LocalizedText maps a BCP-47 locale code (e.g. "en", "ru") to its translation.
+message LocalizedText {
+  map<string, string> translations = 1;
+}
+
+// ---- Entities ----
+
+message VenueSettings {
+  string venue_id = 1;
+  string name = 2;
+  string logo_url = 3;
+  string currency = 4;
+  repeated string locales = 5;
+  string default_locale = 6;
+  string timezone = 7;
+  int32 service_charge_bps = 8;   // basis points, e.g. 1000 = 10%
+  int32 order_item_comment_max_len = 9;
+  int64 order_total_limit_minor = 10;
+  int32 cancel_window_seconds = 11;
+  int32 kds_amber_threshold_seconds = 12;
+  int32 kds_red_threshold_seconds = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message Hall {
+  string id = 1;
+  string venue_id = 2;
+  string name = 3;
+  int32 sort_order = 4;
+  bool is_active = 5;
+}
+
+message Table {
+  string id = 1;
+  string venue_id = 2;
+  string hall_id = 3;
+  string label = 4;
+  int32 seats = 5;
+  bool is_active = 6;
+  string table_code = 7;    // immutable, random, URL-safe, >=10 chars
+  int32 key_version = 8;    // HMAC key version used for the current QR signature
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message Category {
+  string id = 1;
+  string venue_id = 2;
+  LocalizedText name = 3;
+  int32 sort_order = 4;
+  bool is_visible = 5;
+  string image_url = 6;
+}
+
+message ModifierOption {
+  string id = 1;
+  string group_id = 2;
+  LocalizedText name = 3;
+  Money price_delta = 4;
+  int32 sort_order = 5;
+}
+
+message ModifierGroup {
+  string id = 1;
+  string item_id = 2;
+  LocalizedText name = 3;
+  int32 min_select = 4;
+  int32 max_select = 5;
+  bool required = 6;
+  repeated ModifierOption options = 7;
+}
+
+message AvailabilityWindow {
+  int32 start_minute_of_day = 1;  // 0..1439, venue-local time
+  int32 end_minute_of_day = 2;
+}
+
+message MenuItem {
+  string id = 1;
+  string venue_id = 2;
+  string category_id = 3;
+  LocalizedText name = 4;
+  LocalizedText description = 5;
+  Money base_price = 6;
+  string image_url = 7;
+  repeated string allergens = 8;
+  bool is_active = 9;      // soft-deleted/published flag
+  bool is_available = 10;  // stop-list state
+  int32 sort_order = 11;
+  repeated ModifierGroup modifier_groups = 12;
+  repeated AvailabilityWindow availability_windows = 13;
+}
+
+// ---- Guest: GetMenu ----
+
+message GetMenuRequest {
+  string venue_id = 1;
+  string locale = 2;
+  string if_menu_version = 3; // optional: caller's cached version, for cheap 304-style checks
+}
+
+message MenuCategory {
+  Category category = 1;
+  repeated MenuItem items = 2;
+}
+
+message GetMenuResponse {
+  string venue_id = 1;
+  string menu_version = 2;
+  string currency = 3;
+  repeated MenuCategory categories = 4;
+  bool not_modified = 5; // true when if_menu_version matched; categories omitted
+}
+
+// ---- Guest: ResolveOrderItems ----
+
+message RequestedItem {
+  string item_id = 1;
+  int32 qty = 2;
+  repeated string modifier_option_ids = 3;
+  string comment = 4;
+}
+
+message ResolvedModifier {
+  string option_id = 1;
+  string name = 2;
+  Money price_delta = 3;
+}
+
+message ResolvedItem {
+  string item_id = 1;
+  string name = 2;
+  Money unit_price = 3;
+  repeated ResolvedModifier modifiers = 4;
+  int32 qty = 5;
+  int64 line_total_minor = 6;
+  string comment = 7;
+}
+
+message UnavailableItem {
+  string item_id = 1;
+  string name = 2;
+  string reason = 3; // e.g. "OUT_OF_STOCK", "INACTIVE", "NOT_FOUND"
+}
+
+message ResolveOrderItemsRequest {
+  string venue_id = 1;
+  string locale = 2;
+  repeated RequestedItem items = 3;
+}
+
+message ResolveOrderItemsResponse {
+  repeated ResolvedItem items = 1;
+  repeated UnavailableItem unavailable = 2;
+  int64 total_minor = 3;
+  string currency = 4;
+  string menu_version = 5;
+}
+
+// ---- Guest: ResolveTable ----
+
+message ResolveTableRequest {
+  string venue_slug = 1;
+  string table_code = 2;
+  string sig = 3;
+  int32 key_version = 4;
+}
+
+message ResolveTableResponse {
+  string venue_id = 1;
+  string table_id = 2;
+  string hall_id = 3;
+  string table_label = 4;
+  bool table_is_active = 5;
+  bool sig_valid = 6;
+  bool key_version_expired = 7; // valid but outside the rotation grace period
+}
+
+// ---- Staff/KDS: SetItemAvailability ----
+
+message SetItemAvailabilityRequest {
+  string venue_id = 1;
+  string item_id = 2;
+  bool is_available = 3;
+  string actor_staff_id = 4;
+}
+
+message SetItemAvailabilityResponse {
+  MenuItem item = 1;
+}
+
+// ---- Admin: venue settings ----
+
+message GetVenueSettingsRequest {
+  string venue_id = 1;
+}
+
+message UpdateVenueSettingsRequest {
+  VenueSettings settings = 1;
+  string actor_staff_id = 2;
+}
+
+// ---- Admin: halls ----
+
+message ListHallsRequest {
+  string venue_id = 1;
+}
+message ListHallsResponse {
+  repeated Hall halls = 1;
+}
+message CreateHallRequest {
+  string venue_id = 1;
+  string name = 2;
+  int32 sort_order = 3;
+}
+message UpdateHallRequest {
+  Hall hall = 1;
+}
+message DeleteHallRequest {
+  string venue_id = 1;
+  string hall_id = 2;
+}
+message DeleteHallResponse {
+  bool deleted = 1;
+}
+
+// ---- Admin: tables ----
+
+message ListTablesRequest {
+  string venue_id = 1;
+  string hall_id = 2; // optional filter
+  string cursor = 3;
+  int32 page_size = 4;
+}
+message ListTablesResponse {
+  repeated Table tables = 1;
+  string next_cursor = 2;
+}
+message CreateTableRequest {
+  string venue_id = 1;
+  string hall_id = 2;
+  string label = 3;
+  int32 seats = 4;
+}
+message UpdateTableRequest {
+  Table table = 1;
+}
+message DeleteTableRequest {
+  string venue_id = 1;
+  string table_id = 2;
+}
+message DeleteTableResponse {
+  bool deleted = 1;
+}
+message RotateVenueQRKeyRequest {
+  string venue_id = 1;
+  string actor_staff_id = 2;
+  int32 grace_period_days = 3;
+}
+message RotateVenueQRKeyResponse {
+  int32 new_key_version = 1;
+  int32 previous_key_version = 2;
+  google.protobuf.Timestamp previous_key_expires_at = 3;
+}
+
+// ---- Admin: categories ----
+
+message ListCategoriesRequest {
+  string venue_id = 1;
+}
+message ListCategoriesResponse {
+  repeated Category categories = 1;
+}
+message CreateCategoryRequest {
+  string venue_id = 1;
+  LocalizedText name = 2;
+  int32 sort_order = 3;
+  bool is_visible = 4;
+  string image_url = 5;
+}
+message UpdateCategoryRequest {
+  Category category = 1;
+}
+message DeleteCategoryRequest {
+  string venue_id = 1;
+  string category_id = 2;
+}
+message DeleteCategoryResponse {
+  bool deleted = 1;
+}
+
+// ---- Admin: menu items ----
+
+message ListMenuItemsRequest {
+  string venue_id = 1;
+  string category_id = 2; // optional filter
+  string cursor = 3;
+  int32 page_size = 4;
+}
+message ListMenuItemsResponse {
+  repeated MenuItem items = 1;
+  string next_cursor = 2;
+}
+message CreateMenuItemRequest {
+  string venue_id = 1;
+  string category_id = 2;
+  LocalizedText name = 3;
+  LocalizedText description = 4;
+  Money base_price = 5;
+  string image_url = 6;
+  repeated string allergens = 7;
+  int32 sort_order = 8;
+}
+message UpdateMenuItemRequest {
+  MenuItem item = 1;
+}
+message DeleteMenuItemRequest {
+  string venue_id = 1;
+  string item_id = 2;
+}
+message DeleteMenuItemResponse {
+  bool deleted = 1;
+}
+
+// ---- Admin: modifier groups ----
+
+message CreateModifierGroupRequest {
+  string venue_id = 1;
+  string item_id = 2;
+  LocalizedText name = 3;
+  int32 min_select = 4;
+  int32 max_select = 5;
+  bool required = 6;
+  repeated ModifierOption options = 7;
+}
+message UpdateModifierGroupRequest {
+  string venue_id = 1;
+  ModifierGroup group = 2;
+}
+message DeleteModifierGroupRequest {
+  string venue_id = 1;
+  string item_id = 2;
+  string group_id = 3;
+}
+message DeleteModifierGroupResponse {
+  bool deleted = 1;
+}

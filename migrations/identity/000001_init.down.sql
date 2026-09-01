@@ -1,0 +1,3 @@
+-- Intentionally a no-op: dropping pgcrypto here would break any later
+-- migration that still depends on it. Extensions are not the target of
+-- normal up/down cycling.

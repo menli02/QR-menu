@@ -1,0 +1,33 @@
+// Code scaffolded by goctl. Safe to edit.
+// goctl 1.10.1
+
+package admin
+
+import (
+	"context"
+
+	"github.com/menli02/QR-menu/services/gateway/internal/svc"
+	"github.com/menli02/QR-menu/services/gateway/internal/types"
+
+	"github.com/zeromicro/go-zero/core/logx"
+)
+
+type UpdateHallLogic struct {
+	logx.Logger
+	ctx    context.Context
+	svcCtx *svc.ServiceContext
+}
+
+func NewUpdateHallLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateHallLogic {
+	return &UpdateHallLogic{
+		Logger: logx.WithContext(ctx),
+		ctx:    ctx,
+		svcCtx: svcCtx,
+	}
+}
+
+func (l *UpdateHallLogic) UpdateHall(req *types.UpdateHallReq) (resp *types.Hall, err error) {
+	// todo: add your logic here and delete this line
+
+	return
+}

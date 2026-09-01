@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_DIRECTORY_MATCH        # we nest under proto/<service>/v1, package is <service>.v1
+    - RPC_REQUEST_RESPONSE_UNIQUE    # mutations return the full updated aggregate by convention (docs/TZ.md §8.2)
+    - RPC_RESPONSE_STANDARD_NAME     # same convention: e.g. UpdateTable returns Table, not UpdateTableResponse
+breaking:
+  use:
+    - WIRE_JSON

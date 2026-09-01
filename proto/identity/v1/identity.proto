@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+// IdentityService owns Staff accounts, roles, password hashing, staff
+// token issue/refresh/revoke, and the signing keys for both staff and
+// guest JWTs. Security-sensitive; smallest possible blast radius and
+// audit surface. See docs/TZ.md §6, §7.1, §11.
+package identity.v1;
+
+option go_package = "github.com/menli02/QR-menu/proto/identity/v1;v1_identitypb";
+
+import "google/protobuf/timestamp.proto";
+
+service IdentityService {
+  // ---- Staff auth ----
+
+  rpc Login(LoginRequest) returns (TokenPair);
+  rpc Refresh(RefreshRequest) returns (TokenPair);
+  rpc Revoke(RevokeRequest) returns (RevokeResponse);
+  rpc GetStaff(GetStaffRequest) returns (Staff);
+
+  // ---- Guest auth ----
+
+  // IssueGuestToken mints an anonymous guest JWT bound to
+  // (venue_id, table_id, guest_session_id) after the gateway has validated
+  // the QR signature via catalog.ResolveTable (docs/TZ.md FR-O1).
+  rpc IssueGuestToken(IssueGuestTokenRequest) returns (TokenPair);
+
+  // ---- Token verification ----
+
+  // ListJWKS exposes the public signing keys so gateway instances can
+  // verify JWTs offline without a round-trip per request.
+  rpc ListJWKS(ListJWKSRequest) returns (JWKS);
+
+  // ---- Admin: staff management ----
+
+  rpc ListStaff(ListStaffRequest) returns (ListStaffResponse);
+  rpc CreateStaff(CreateStaffRequest) returns (Staff);
+  rpc UpdateStaff(UpdateStaffRequest) returns (Staff);
+  rpc DeleteStaff(DeleteStaffRequest) returns (DeleteStaffResponse);
+  rpc SetStaffPassword(SetStaffPasswordRequest) returns (SetStaffPasswordResponse);
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_ADMIN = 1;
+  ROLE_MANAGER = 2;
+  ROLE_WAITER = 3;
+  ROLE_COOK = 4;
+}
+
+message Staff {
+  string id = 1;
+  string venue_id = 2;
+  string name = 3;
+  string email = 4;
+  Role role = 5;
+  bool is_active = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2; // empty for guest tokens (no refresh flow in R1)
+  string token_type = 3;    // "Bearer"
+  google.protobuf.Timestamp access_token_expires_at = 4;
+  google.protobuf.Timestamp refresh_token_expires_at = 5;
+}
+
+message JWK {
+  string kid = 1;
+  string kty = 2; // "RSA" | "EC" | "oct"
+  string use = 3; // "sig"
+  string alg = 4; // e.g. "RS256"
+  string n = 5;   // RSA modulus, base64url
+  string e = 6;   // RSA exponent, base64url
+  string crv = 7; // EC curve, if kty == "EC"
+  string x = 8;
+  string y = 9;
+}
+
+message JWKS {
+  repeated JWK keys = 1;
+}
+
+// ---- Staff auth ----
+
+message LoginRequest {
+  string venue_id = 1;
+  string email = 2;
+  string password = 3;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+}
+
+message RevokeRequest {
+  string refresh_token = 1;
+}
+message RevokeResponse {
+  bool revoked = 1;
+}
+
+message GetStaffRequest {
+  string staff_id = 1;
+}
+
+// ---- Guest auth ----
+
+message IssueGuestTokenRequest {
+  string venue_id = 1;
+  string table_id = 2;
+  string guest_session_id = 3;
+  int32 ttl_seconds = 4; // default 14400 (4h) if unset
+}
+
+// ---- JWKS ----
+
+message ListJWKSRequest {}
+
+// ---- Admin: staff management ----
+
+message ListStaffRequest {
+  string venue_id = 1;
+  string cursor = 2;
+  int32 page_size = 3;
+}
+message ListStaffResponse {
+  repeated Staff staff = 1;
+  string next_cursor = 2;
+}
+
+message CreateStaffRequest {
+  string venue_id = 1;
+  string name = 2;
+  string email = 3;
+  string password = 4;
+  Role role = 5;
+  string actor_staff_id = 6;
+}
+
+message UpdateStaffRequest {
+  Staff staff = 1;
+  string actor_staff_id = 2;
+}
+
+message DeleteStaffRequest {
+  string venue_id = 1;
+  string staff_id = 2;
+  string actor_staff_id = 3;
+}
+message DeleteStaffResponse {
+  bool deleted = 1;
+}
+
+message SetStaffPasswordRequest {
+  string venue_id = 1;
+  string staff_id = 2;
+  string new_password = 3;
+  string actor_staff_id = 4;
+}
+message SetStaffPasswordResponse {
+  bool updated = 1;
+}
