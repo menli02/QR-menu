@@ -49,6 +49,24 @@ make run-gateway    # in another — REST+WS on :8888
 `make help` lists every target, including `make proto` (regenerate contracts after
 editing a `.proto` file) and `make migrate-new svc=<name> name=<description>`.
 
+## CI and container images
+
+Every push/PR runs `.github/workflows/ci.yml` (`gofmt`, `go vet`, `go build`,
+`go test -race`, `golangci-lint`, `buf lint`/`buf breaking`) and
+`.github/workflows/docker.yml` (builds all 4 service images; pushes to GHCR
+only from `main` or a `v*` tag).
+
+Each service has its own multi-stage `Dockerfile` (distroless static
+runtime, non-root, ~18MB images). Build locally with:
+
+```sh
+make docker-build   # builds qrmenu-{gateway,catalog,order,identity}:local
+```
+
+The config baked into each image is the local-dev `etc/*.yaml` — production
+values come from a Kubernetes ConfigMap/Secret mounted at the same path
+(`deploy/k8s`, not yet written; see docs/TZ.md §7.1).
+
 ## Public repository
 
 This repo is public. No secrets, real customer data, or production dumps —

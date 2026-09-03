@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "::error::the following files are not gofmt'd (run 'make fmt'):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./... -race -cover
+
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pinned to the version validated locally against this codebase
+      # (0 issues on default linters). Bump deliberately, not silently.
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.6.2
+
+  proto:
+    name: buf lint / breaking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.47.2"
+
+      - name: buf lint
+        run: buf lint
+
+      # Only meaningful on a PR: compares this branch's proto/ against main
+      # to catch wire-breaking contract changes (docs/TZ.md §8.2 treats
+      # these as long-lived interfaces).
+      - name: buf breaking (against main)
+        if: github.event_name == 'pull_request'
+        run: buf breaking --against '.git#branch=main'

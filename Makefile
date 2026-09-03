@@ -20,6 +20,7 @@ help:
 	@echo "make run-catalog       run the catalog rpc service"
 	@echo "make run-order         run the order rpc service"
 	@echo "make run-gateway       run the gateway rest service"
+	@echo "make docker-build      build local images for all 4 services (tag :local)"
 
 # ---- Infra (docker-compose, local dev only — see deploy/docker-compose.yml) ----
 
@@ -100,3 +101,13 @@ run-order:
 
 run-gateway:
 	go run ./services/gateway -f services/gateway/etc/gateway-api.yaml
+
+# ---- Docker images (see services/*/Dockerfile; CI builds/pushes these to
+# GHCR from .github/workflows/docker.yml on push to main / a v* tag) ----
+
+.PHONY: docker-build
+docker-build:
+	@for svc in gateway catalog order identity; do \
+		echo "==> $$svc" ; \
+		docker build -f services/$$svc/Dockerfile -t qrmenu-$$svc:local . || exit 1 ; \
+	done
