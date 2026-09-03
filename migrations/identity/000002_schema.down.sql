@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS signing_keys;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS staff;
+DROP FUNCTION IF EXISTS set_updated_at();
+DROP EXTENSION IF EXISTS citext;

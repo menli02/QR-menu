@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS outbox;
+DROP TABLE IF EXISTS modifier_options;
+DROP TABLE IF EXISTS modifier_groups;
+DROP TABLE IF EXISTS availability_windows;
+DROP TABLE IF EXISTS menu_items;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS tables;
+DROP TABLE IF EXISTS halls;
+DROP TABLE IF EXISTS venue_qr_keys;
+DROP TABLE IF EXISTS venues;
+DROP FUNCTION IF EXISTS set_updated_at();

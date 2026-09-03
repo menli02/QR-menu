@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS outbox;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS service_requests;
+DROP TABLE IF EXISTS order_item_modifiers;
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS order_number_counters;
+DROP TABLE IF EXISTS guest_sessions;
+DROP TABLE IF EXISTS table_sessions;
+DROP FUNCTION IF EXISTS set_updated_at();
