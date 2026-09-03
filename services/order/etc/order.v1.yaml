@@ -2,6 +2,7 @@
 # a Kubernetes ConfigMap/Secret and an Etcd/DNS endpoint inside the cluster,
 # never by this file. See docs/TZ.md §7.1, deploy/docker-compose.yml.
 Name: order.rpc
+Mode: dev # enables gRPC reflection so `grpcurl` (README prerequisites) works without a .proto file
 ListenOn: 0.0.0.0:8083
 Etcd:
   Hosts:

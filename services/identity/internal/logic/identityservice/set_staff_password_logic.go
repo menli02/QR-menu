@@ -7,6 +7,8 @@ import (
 	"github.com/menli02/QR-menu/services/identity/internal/svc"
 
 	"github.com/zeromicro/go-zero/core/logx"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type SetStaffPasswordLogic struct {
@@ -24,7 +26,18 @@ func NewSetStaffPasswordLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 }
 
 func (l *SetStaffPasswordLogic) SetStaffPassword(in *v1_identitypb.SetStaffPasswordRequest) (*v1_identitypb.SetStaffPasswordResponse, error) {
-	// todo: add your logic here and delete this line
+	if len(in.GetNewPassword()) < minPasswordLen {
+		return nil, status.Errorf(codes.InvalidArgument, "password must be at least %d characters", minPasswordLen)
+	}
 
-	return &v1_identitypb.SetStaffPasswordResponse{}, nil
+	hash, err := hashPassword(in.GetNewPassword())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "hash password: %v", err)
+	}
+
+	updated, err := l.svcCtx.StaffModel.SetPassword(l.ctx, in.GetStaffId(), in.GetVenueId(), hash)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "set password: %v", err)
+	}
+	return &v1_identitypb.SetStaffPasswordResponse{Updated: updated}, nil
 }

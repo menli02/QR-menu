@@ -6,18 +6,27 @@ type Config struct {
 	zrpc.RpcServerConf
 
 	// Postgres is the identity_db connection: staff, roles, refresh
-	// tokens, JWT signing keys (docs/TZ.md §6, §7.1, §11).
+	// tokens, JWT signing-key metadata (docs/TZ.md §6, §7.1, §11).
 	Postgres struct {
 		DataSource string
 	}
 
-	// JWT holds the signing key material for both staff and guest tokens.
-	// AccessSecret here is a non-secret local-dev placeholder only — real
-	// deployments source it from a Kubernetes Secret and must rotate it
-	// via a key_version'd JWKS, never a bare shared secret in a committed
-	// file (docs/TZ.md §11.3, FR-T4-style rotation for token keys).
+	// JWT signing is asymmetric (RS256) by design, not a shared secret:
+	// ListJWKS is a public discovery endpoint so gateway instances can
+	// verify tokens offline (docs/TZ.md §8.2), and the JWK message in
+	// identity.proto only carries RSA/EC *public* key fields (n/e or
+	// crv/x/y) — there is no field for a symmetric secret, because
+	// publishing one over that same public endpoint would let anyone
+	// forge tokens.
 	JWT struct {
-		AccessSecret         string
+		// PrivateKeyPath is a PEM-encoded RSA private key. In production
+		// this file is a mounted Kubernetes Secret volume — never a value
+		// baked into this config (docs/TZ.md §7.1, §11). If the file
+		// doesn't exist yet, identity generates one and writes it here on
+		// first boot, so local-dev restarts reuse the same key instead of
+		// invalidating every previously issued token.
+		PrivateKeyPath string
+
 		AccessExpireSeconds  int64
 		RefreshExpireSeconds int64
 		GuestTokenTTLSeconds int64
