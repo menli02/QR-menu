@@ -1,23 +1,42 @@
-// Code scaffolded by goctl. Safe to edit.
-// goctl 1.10.1
-
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"time"
 
+	"github.com/menli02/QR-menu/services/identity/client/identityservice"
+)
+
+// GuestAuthMiddleware verifies an anonymous guest JWT offline against
+// identity.ListJWKS and injects GuestClaims into the request context
+// (docs/TZ.md FR-O1, §8.2).
 type GuestAuthMiddleware struct {
+	cache *jwksCache
 }
 
-func NewGuestAuthMiddleware() *GuestAuthMiddleware {
-	return &GuestAuthMiddleware{}
+func NewGuestAuthMiddleware(client identityservice.IdentityService, jwksRefreshInterval time.Duration) *GuestAuthMiddleware {
+	return &GuestAuthMiddleware{cache: newJWKSCache(client, jwksRefreshInterval)}
 }
 
 func (m *GuestAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO(docs/TZ.md §8.2, §11): verify the guest JWT offline against
-		// identity.ListJWKS, reject on bad/expired signature, and inject
-		// venue_id/table_id/guest_session_id claims into the request
-		// context for downstream handlers. Passthrough only — no auth yet.
-		next(w, r)
+		token, ok := bearerToken(r)
+		if !ok {
+			writeUnauthenticated(w, r)
+			return
+		}
+
+		var claims guestJWTClaims
+		if err := verifyToken(r.Context(), m.cache, token, &claims); err != nil {
+			writeUnauthenticated(w, r)
+			return
+		}
+
+		ctx := withGuestClaims(r.Context(), GuestClaims{
+			VenueID:        claims.VenueID,
+			TableID:        claims.TableID,
+			GuestSessionID: claims.GuestSessionID,
+		})
+		next(w, r.WithContext(ctx))
 	}
 }
