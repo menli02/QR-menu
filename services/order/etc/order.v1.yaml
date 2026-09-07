@@ -21,5 +21,22 @@ CatalogRpc:
   NonBlock: true
   Timeout: 800   # rpc->rpc budget per docs/TZ.md §7.4
 
-KafkaBrokers:
-- 127.0.0.1:9092
+# Empty in local dev: outbox rows still accumulate in order_db and can be
+# inspected there, but nothing tries to reach a broker that isn't running.
+# To exercise the relay locally, run `make kafka-topics` and set this to
+# ["127.0.0.1:9094"] (compose's host-reachable listener; services running
+# *inside* compose use ["kafka:9092"] instead).
+KafkaBrokers: []
+
+Outbox:
+  PollIntervalMs: 500
+  BatchSize: 100
+  MaxAttempts: 5   # docs/TZ.md §8.3: 5 attempts, then the DLQ
+
+# Must match identity's guest token TTL (FR-O1: 4h).
+GuestSessionTTLSeconds: 14400
+# FR-S4: an unattended call-waiter / request-bill expires after 15 min.
+ServiceRequestTTLSeconds: 900
+# How long a cached copy of a venue's order limits may be stale. Nothing
+# priced is cached — see services/order/internal/venue.
+VenueSettingsCacheSeconds: 60

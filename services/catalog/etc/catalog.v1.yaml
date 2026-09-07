@@ -20,5 +20,14 @@ MinIO:
   Bucket: catalog-images
   UseSSL: false
 
-KafkaBrokers:
-- 127.0.0.1:9092
+# Empty in local dev: outbox rows still accumulate in catalog_db and can
+# be inspected there, but nothing tries to reach a broker that isn't
+# running. To exercise the relay locally, run `make kafka-topics` and set
+# this to ["127.0.0.1:9094"] (compose's host-reachable listener; services
+# running *inside* compose use ["kafka:9092"] instead).
+KafkaBrokers: []
+
+Outbox:
+  PollIntervalMs: 500
+  BatchSize: 100
+  MaxAttempts: 5   # docs/TZ.md §8.3: 5 attempts, then the DLQ

@@ -10,6 +10,7 @@ help:
 	@echo "make infra-up          start Postgres/Redis/Kafka/MinIO/etcd for local dev"
 	@echo "make infra-down        stop and remove local dev infra (keeps volumes)"
 	@echo "make infra-reset       stop local dev infra and delete its volumes"
+	@echo "make kafka-topics      create the §8.3 Kafka topics with their planned partitions"
 	@echo "make proto             regenerate pb/grpc stubs for all services (buf lint first)"
 	@echo "make build             go build ./..."
 	@echo "make test              go test ./..."
@@ -24,9 +25,15 @@ help:
 
 # ---- Infra (docker-compose, local dev only — see deploy/docker-compose.yml) ----
 
-.PHONY: infra-up infra-down infra-reset
+.PHONY: infra-up infra-down infra-reset kafka-topics
 infra-up:
 	$(COMPOSE) up -d
+
+# Creates the §8.3 topics with their planned partition counts. Not folded
+# into infra-up because it needs the broker to be accepting connections,
+# which is a few seconds after the container starts.
+kafka-topics:
+	./scripts/kafka-topics.sh
 
 infra-down:
 	$(COMPOSE) down

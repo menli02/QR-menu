@@ -24,7 +24,17 @@ type Config struct {
 	}
 
 	// KafkaBrokers feeds the transactional outbox relay that publishes
-	// qrmenu.catalog.v1 events (docs/TZ.md §7.2, §8.3). Field shape only
-	// for now — no producer is constructed until the relay is implemented.
+	// qrmenu.catalog.v1 events (docs/TZ.md §7.2, §8.3). Empty disables
+	// the relay, which is the right local-dev default: outbox rows still
+	// accumulate and can be inspected, nothing tries to reach a broker
+	// that isn't there.
 	KafkaBrokers []string
+
+	// Outbox tunes the relay goroutine (see pkg/outbox). Defaults are
+	// applied for any field left at zero.
+	Outbox struct {
+		PollIntervalMs int
+		BatchSize      int
+		MaxAttempts    int
+	}
 }

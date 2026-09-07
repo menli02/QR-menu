@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 
+	"github.com/menli02/QR-menu/pkg/outbox"
 	"github.com/menli02/QR-menu/proto/catalog/v1"
 	"github.com/menli02/QR-menu/services/catalog/internal/config"
 	catalogserviceServer "github.com/menli02/QR-menu/services/catalog/internal/server/catalogservice"
@@ -32,8 +34,24 @@ func main() {
 			reflection.Register(grpcServer)
 		}
 	})
-	defer s.Stop()
+
+	// Drains catalog's outbox into qrmenu.catalog.v1 — the path behind
+	// FR-C4's "a stop-list change reaches guest clients within 5s". See
+	// pkg/outbox and services/order/order.v1.go for why the relay is
+	// in-process.
+	relay := outbox.New(ctx.DB, outbox.Config{
+		Brokers:      c.KafkaBrokers,
+		PollInterval: time.Duration(c.Outbox.PollIntervalMs) * time.Millisecond,
+		BatchSize:    c.Outbox.BatchSize,
+		MaxAttempts:  c.Outbox.MaxAttempts,
+		Source:       c.Name,
+	})
+
+	group := service.NewServiceGroup()
+	defer group.Stop()
+	group.Add(s)
+	group.Add(relay)
 
 	fmt.Printf("Starting rpc server at %s...\n", c.ListenOn)
-	s.Start()
+	group.Start()
 }
