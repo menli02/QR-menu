@@ -6,6 +6,9 @@ package auth
 import (
 	"context"
 
+	v1_identitypb "github.com/menli02/QR-menu/proto/identity/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/errs"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -26,8 +29,33 @@ func NewLogoutLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LogoutLogi
 	}
 }
 
+// Logout revokes a refresh token.
+//
+// Revoking a token that was already invalid reports revoked=true rather
+// than an error. Logout is idempotent by nature: the caller's intent is
+// "this token must not work any more", and if it already doesn't, that
+// intent is satisfied. Returning 404 would also confirm to an attacker
+// which tokens are live.
+//
+// The access token is untouched — it is a stateless JWT and stays valid
+// until it expires (15 min). That is the accepted trade of offline
+// verification (docs/TZ.md §7.3: the gateway verifies tokens against JWKS
+// without calling identity), and it is why access TTLs are short.
 func (l *LogoutLogic) Logout(req *types.LogoutReq) (resp *types.LogoutResp, err error) {
-	// todo: add your logic here and delete this line
+	if req.RefreshToken == "" {
+		return nil, errs.New(errs.CodeValidationFailed, "refreshToken is required")
+	}
 
-	return
+	revoked, err := l.svcCtx.IdentityRpc.Revoke(l.ctx, &v1_identitypb.RevokeRequest{
+		RefreshToken: req.RefreshToken,
+	})
+	if err != nil {
+		converted := rpcerr.From(err)
+		if converted.Code == errs.CodeNotFound {
+			return &types.LogoutResp{Revoked: true}, nil
+		}
+		return nil, converted
+	}
+
+	return &types.LogoutResp{Revoked: revoked.GetRevoked()}, nil
 }

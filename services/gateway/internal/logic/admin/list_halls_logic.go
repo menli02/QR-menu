@@ -6,6 +6,10 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +31,15 @@ func NewListHallsLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ListHal
 }
 
 func (l *ListHallsLogic) ListHalls() (resp *types.ListHallsResp, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	return
+	halls, err := l.svcCtx.CatalogRpc.ListHalls(l.ctx, &v1_catalogpb.ListHallsRequest{VenueId: claims.VenueID})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	return &types.ListHallsResp{Halls: convert.Halls(halls.GetHalls())}, nil
 }

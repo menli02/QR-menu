@@ -7,11 +7,14 @@ import (
 	"net/http"
 
 	"github.com/menli02/QR-menu/services/gateway/internal/config"
+	"github.com/menli02/QR-menu/services/gateway/internal/consumer"
 	"github.com/menli02/QR-menu/services/gateway/internal/errs"
 	"github.com/menli02/QR-menu/services/gateway/internal/handler"
+	"github.com/menli02/QR-menu/services/gateway/internal/reqctx"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 
 	"github.com/zeromicro/go-zero/core/conf"
+	"github.com/zeromicro/go-zero/core/service"
 	"github.com/zeromicro/go-zero/rest"
 	"github.com/zeromicro/go-zero/rest/httpx"
 	"go.opentelemetry.io/otel/trace"
@@ -30,12 +33,33 @@ func main() {
 	server := rest.MustNewServer(c.RestConf)
 	defer server.Stop()
 
+	// Global, before routing: lifts Idempotency-Key and the client IP into
+	// the request context. goctl's logic signatures receive no
+	// *http.Request, so this is how a header reaches a handler without
+	// hand-editing generated code that regeneration would overwrite.
+	server.Use(reqctx.Middleware)
+
 	ctx := svc.NewServiceContext(c)
 	handler.RegisterHandlers(server, ctx)
-	registerUnroutedStubs(server)
+	registerUnroutedRoutes(server, ctx)
+
+	// The Kafka consumer and the REST server share a hub: an event
+	// published by order or catalog reaches the sockets this instance
+	// holds (docs/TZ.md §7.3). Every gateway pod uses its own consumer
+	// group, so all of them see every event — see the consumer package.
+	realtime := consumer.New(ctx.Hub, consumer.Config{
+		Brokers:     c.KafkaBrokers,
+		GroupPrefix: c.KafkaGroupPrefix,
+		InstanceID:  c.KafkaInstanceID,
+	})
+
+	group := service.NewServiceGroup()
+	defer group.Stop()
+	group.Add(server)
+	group.Add(realtime)
 
 	fmt.Printf("Starting server at %s:%d...\n", c.Host, c.Port)
-	server.Start()
+	group.Start()
 }
 
 // errorHandler implements the public error envelope (docs/TZ.md §8.1):
@@ -64,20 +88,29 @@ func traceID(ctx context.Context) string {
 	return ""
 }
 
-// registerUnroutedStubs wires the two contract routes that don't fit the
-// goctl .api JSON DSL (docs/TZ.md §7.3, FR-T3): WebSocket upgrades and a
-// binary PDF download. Both currently return 501 — implementing them is
-// next-phase business logic (the realtime hub and QR/PDF rendering),
-// not part of this skeleton.
-func registerUnroutedStubs(server *rest.Server) {
-	// Plain 501, deliberately outside the errs envelope: these routes are
-	// not wired to any logic yet, which is a scaffold state, not one of
-	// the closed set of domain error codes in docs/TZ.md §8.1.
-	notImplemented := func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not implemented", http.StatusNotImplemented)
-	}
+// registerUnroutedRoutes wires the contract routes that don't fit the
+// goctl .api JSON DSL: WebSocket upgrades and a binary PDF download.
+//
+// The sockets authenticate from their first frame rather than an
+// Authorization header (docs/TZ.md §8.1), so they carry no auth middleware
+// here — the handler verifies the token itself, sharing the middlewares'
+// JWKS cache.
+func registerUnroutedRoutes(server *rest.Server, ctx *svc.ServiceContext) {
+	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/guest", Handler: ctx.WS.ServeGuest})
+	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/staff", Handler: ctx.WS.ServeStaff})
 
-	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/guest", Handler: notImplemented})
-	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/staff", Handler: notImplemented})
-	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/api/v1/admin/tables/qr.pdf", Handler: notImplemented})
+	// Still 501: rendering printable QR codes needs a table's HMAC
+	// signature, and nothing in the catalog contract exposes one — no
+	// `sig` field on Table, no RPC that returns it. The gateway cannot
+	// derive it either; the key lives in catalog. Flagged in
+	// CreateTable's handler too. Deliberately outside the errs envelope,
+	// because "this route is not built" is not one of §8.1's closed set of
+	// domain error codes.
+	server.AddRoute(rest.Route{
+		Method: http.MethodGet,
+		Path:   "/api/v1/admin/tables/qr.pdf",
+		Handler: func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "not implemented: no contract exposes a table's QR signature", http.StatusNotImplemented)
+		},
+	})
 }

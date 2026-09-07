@@ -6,6 +6,11 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/errs"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +32,25 @@ func NewCreateCategoryLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Cr
 }
 
 func (l *CreateCategoryLogic) CreateCategory(req *types.CreateCategoryReq) (resp *types.Category, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name == "" {
+		return nil, errs.New(errs.CodeValidationFailed, "name is required")
+	}
 
-	return
+	category, err := l.svcCtx.CatalogRpc.CreateCategory(l.ctx, &v1_catalogpb.CreateCategoryRequest{
+		VenueId:   claims.VenueID,
+		Name:      convert.LocalizedMap(req.Locale, req.Name),
+		SortOrder: req.SortOrder,
+		IsVisible: req.IsVisible,
+		ImageUrl:  req.ImageUrl,
+	})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	out := convert.Category(category, req.Locale, req.Locale)
+	return &out, nil
 }

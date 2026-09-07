@@ -62,14 +62,19 @@ type orderTransitionedPayload struct {
 }
 
 type orderItemTransitionedPayload struct {
-	OrderID      string `json:"order_id"`
-	OrderItemID  string `json:"order_item_id"`
-	MenuItemID   string `json:"menu_item_id"`
-	TableID      string `json:"table_id"`
-	From         string `json:"from"`
-	To           string `json:"to"`
-	Reason       string `json:"reason,omitempty"`
-	ActorStaffID string `json:"actor_staff_id,omitempty"`
+	OrderID     string `json:"order_id"`
+	OrderItemID string `json:"order_item_id"`
+	MenuItemID  string `json:"menu_item_id"`
+	TableID     string `json:"table_id"`
+	// TableSessionID is what lets the gateway route this to the guests'
+	// session channel. Without it a line going "ready" reached the kitchen
+	// and nobody else — caught by an end-to-end test, because every other
+	// order event happened to carry it and this one did not.
+	TableSessionID string `json:"table_session_id"`
+	From           string `json:"from"`
+	To             string `json:"to"`
+	Reason         string `json:"reason,omitempty"`
+	ActorStaffID   string `json:"actor_staff_id,omitempty"`
 	// OrderStatus is the order's status after any FR-K5 auto-transition
 	// this item change triggered, so a consumer doesn't have to infer it.
 	OrderStatus string `json:"order_status"`

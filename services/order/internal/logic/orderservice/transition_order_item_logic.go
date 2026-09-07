@@ -179,15 +179,16 @@ func (l *TransitionOrderItemLogic) apply(
 	if err := model.NewOutboxModel(s).Insert(ctx, eventOrderItemTransitioned, in.GetVenueId(),
 		model.TopicOrder, order.ID,
 		orderItemTransitionedPayload{
-			OrderID:      order.ID,
-			OrderItemID:  item.ID,
-			MenuItemID:   item.MenuItemID,
-			TableID:      order.TableID,
-			From:         item.Status,
-			To:           to,
-			Reason:       in.GetReason(),
-			ActorStaffID: in.GetActorStaffId(),
-			OrderStatus:  orderStatus,
+			OrderID:        order.ID,
+			OrderItemID:    item.ID,
+			MenuItemID:     item.MenuItemID,
+			TableID:        order.TableID,
+			TableSessionID: order.TableSessionID,
+			From:           item.Status,
+			To:             to,
+			Reason:         in.GetReason(),
+			ActorStaffID:   in.GetActorStaffId(),
+			OrderStatus:    orderStatus,
 		}, traceID(ctx)); err != nil {
 		l.Errorf("write order.item_transitioned outbox row: %v", err)
 		return nil, apierr.Internal("write outbox row")

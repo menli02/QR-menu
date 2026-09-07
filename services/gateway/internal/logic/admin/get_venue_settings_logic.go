@@ -6,6 +6,10 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -26,8 +30,23 @@ func NewGetVenueSettingsLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 	}
 }
 
+// GetVenueSettings returns the venue's configuration (FR-A2).
+//
+// The venue is taken from the caller's token, so there is no id to
+// substitute: an admin of one venue cannot read another's settings.
 func (l *GetVenueSettingsLogic) GetVenueSettings() (resp *types.VenueSettings, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	return
+	settings, err := l.svcCtx.CatalogRpc.GetVenueSettings(l.ctx, &v1_catalogpb.GetVenueSettingsRequest{
+		VenueId: claims.VenueID,
+	})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	out := convert.VenueSettings(settings)
+	return &out, nil
 }

@@ -400,9 +400,10 @@ type TopItem struct {
 }
 
 type TransitionOrderItemReq struct {
-	Id     string `path:"id"`
-	To     string `json:"to"`
-	Reason string `json:"reason,optional"`
+	Id      string `path:"id"`
+	OrderId string `json:"orderId"`
+	To      string `json:"to"`
+	Reason  string `json:"reason,optional"`
 }
 
 type TransitionOrderReq struct {

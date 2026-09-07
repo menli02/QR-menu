@@ -23,29 +23,29 @@ type Config struct {
 	// (docs/TZ.md §7.2, §8.3). Empty disables the relay, which is the
 	// right local-dev default: outbox rows still accumulate and can be
 	// inspected, nothing tries to reach a broker that isn't there.
-	KafkaBrokers []string
+	KafkaBrokers []string `json:",optional"`
 
 	// Outbox tunes the relay goroutine. Defaults are set in NewRelay when
 	// a field is left at zero.
 	Outbox struct {
-		PollIntervalMs int
-		BatchSize      int
-		MaxAttempts    int
+		PollIntervalMs int `json:",optional"`
+		BatchSize      int `json:",optional"`
+		MaxAttempts    int `json:",optional"`
 	}
 
 	// GuestSessionTTLSeconds must match identity's guest token TTL: this
 	// service records expires_at on guest_sessions as a bookkeeping copy
 	// of the JWT's own `exp` (see the migration's comment). Defaults to
 	// 4h (FR-O1) when unset.
-	GuestSessionTTLSeconds int
+	GuestSessionTTLSeconds int `json:",optional"`
 
 	// ServiceRequestTTLSeconds is FR-S4's auto-expiry window for an open
 	// call-waiter / request-bill. Defaults to 15 min when unset.
-	ServiceRequestTTLSeconds int
+	ServiceRequestTTLSeconds int `json:",optional"`
 
 	// VenueSettingsCacheSeconds bounds how stale the cached copy of a
 	// venue's order limits may be (see internal/venue). Defaults to 60s.
-	VenueSettingsCacheSeconds int
+	VenueSettingsCacheSeconds int `json:",optional"`
 }
 
 // Effective values, with the documented defaults applied. Kept as methods

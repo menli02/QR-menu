@@ -1,6 +1,7 @@
 package orderservicelogic
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -297,5 +298,53 @@ func TestClampPageSize(t *testing.T) {
 		if got := clampPageSize(tc.in); got != tc.want {
 			t.Errorf("clampPageSize(%d) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestEventPayloadsCarryTheirRoutingFields guards a failure mode that is
+// invisible in the order service and only shows up two hops away: the
+// gateway routes an event to the guests' WebSocket channel by reading
+// table_session_id out of the payload, so an event that omits it reaches
+// the kitchen and nobody else.
+//
+// That is exactly what happened to order.item_transitioned — a line going
+// "ready" never reached the guest, and it took an end-to-end run to
+// notice, because every other order event happened to carry the field.
+// This test asserts the shape directly so the next omission fails here.
+func TestEventPayloadsCarryTheirRoutingFields(t *testing.T) {
+	const sessionID = "11111111-1111-1111-1111-111111111111"
+
+	// Every payload the gateway routes to a guest session channel; see
+	// services/gateway/internal/consumer.Route.
+	guestVisible := []struct {
+		name    string
+		payload any
+	}{
+		{eventOrderPlaced, orderPlacedPayload{TableSessionID: sessionID}},
+		{eventOrderTransitioned, orderTransitionedPayload{TableSessionID: sessionID}},
+		{eventOrderItemTransitioned, orderItemTransitionedPayload{TableSessionID: sessionID}},
+		{eventTableSessionOpened, tableSessionOpenedPayload{TableSessionID: sessionID}},
+		{eventTableSessionClosed, tableSessionClosedPayload{TableSessionID: sessionID}},
+		{eventServiceRequestCreated, serviceRequestCreatedPayload{TableSessionID: sessionID}},
+		{eventServiceRequestTransited, serviceRequestTransitionedPayload{TableSessionID: sessionID}},
+	}
+
+	for _, tc := range guestVisible {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var decoded struct {
+				TableSessionID string `json:"table_session_id"`
+			}
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if decoded.TableSessionID != sessionID {
+				t.Errorf("%s payload has no table_session_id — the gateway cannot route it to the guest: %s",
+					tc.name, raw)
+			}
+		})
 	}
 }

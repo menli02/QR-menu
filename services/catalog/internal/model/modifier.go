@@ -77,7 +77,7 @@ func (m *ModifierGroupModel) ListByItemIDs(ctx context.Context, itemIDs []string
 func (m *ModifierGroupModel) Update(ctx context.Context, id, itemID string, name localizedText, minSelect, maxSelect int32, required bool) (*ModifierGroup, error) {
 	var g ModifierGroup
 	err := m.conn.QueryRowCtx(ctx, &g, `
-		UPDATE modifier_groups SET name = $3, min_select = $4, max_select = $5, required = $6
+		UPDATE modifier_groups SET name = name || $3::jsonb, min_select = $4, max_select = $5, required = $6
 		WHERE id = $1 AND item_id = $2
 		RETURNING `+modifierGroupCols,
 		id, itemID, name, minSelect, maxSelect, required)

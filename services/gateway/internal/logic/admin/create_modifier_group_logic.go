@@ -6,6 +6,10 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +31,27 @@ func NewCreateModifierGroupLogic(ctx context.Context, svcCtx *svc.ServiceContext
 }
 
 func (l *CreateModifierGroupLogic) CreateModifierGroup(req *types.CreateModifierGroupReq) (resp *types.ModifierGroup, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateModifierGroup(req.ItemId, req.Name, req.MinSelect, req.MaxSelect, req.Required, len(req.Options)); err != nil {
+		return nil, err
+	}
 
-	return
+	group, err := l.svcCtx.CatalogRpc.CreateModifierGroup(l.ctx, &v1_catalogpb.CreateModifierGroupRequest{
+		VenueId:   claims.VenueID,
+		ItemId:    req.ItemId,
+		Name:      convert.LocalizedMap(req.Locale, req.Name),
+		MinSelect: req.MinSelect,
+		MaxSelect: req.MaxSelect,
+		Required:  req.Required,
+		Options:   modifierOptions(req.Locale, req.Options),
+	})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	out := convert.ModifierGroup(group, req.Locale, req.Locale)
+	return &out, nil
 }

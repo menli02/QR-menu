@@ -41,6 +41,12 @@ func (s *CatalogServiceServer) ResolveTable(ctx context.Context, in *v1_catalogp
 	return l.ResolveTable(in)
 }
 
+// ResolveVenueBySlug maps a public venue slug to its id.
+func (s *CatalogServiceServer) ResolveVenueBySlug(ctx context.Context, in *v1_catalogpb.ResolveVenueBySlugRequest) (*v1_catalogpb.ResolveVenueBySlugResponse, error) {
+	l := catalogservicelogic.NewResolveVenueBySlugLogic(ctx, s.svcCtx)
+	return l.ResolveVenueBySlug(in)
+}
+
 // SetItemAvailability toggles the stop-list ("86") state of a menu item.
 func (s *CatalogServiceServer) SetItemAvailability(ctx context.Context, in *v1_catalogpb.SetItemAvailabilityRequest) (*v1_catalogpb.SetItemAvailabilityResponse, error) {
 	l := catalogservicelogic.NewSetItemAvailabilityLogic(ctx, s.svcCtx)

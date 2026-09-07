@@ -6,6 +6,11 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/errs"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +32,23 @@ func NewCreateHallLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Create
 }
 
 func (l *CreateHallLogic) CreateHall(req *types.CreateHallReq) (resp *types.Hall, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name == "" {
+		return nil, errs.New(errs.CodeValidationFailed, "name is required")
+	}
 
-	return
+	hall, err := l.svcCtx.CatalogRpc.CreateHall(l.ctx, &v1_catalogpb.CreateHallRequest{
+		VenueId:   claims.VenueID,
+		Name:      req.Name,
+		SortOrder: req.SortOrder,
+	})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	out := convert.Hall(hall)
+	return &out, nil
 }

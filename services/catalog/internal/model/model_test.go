@@ -479,3 +479,101 @@ func TestOutboxModel_insert(t *testing.T) {
 		t.Fatalf("expected exactly 1 unsent outbox row, got %d", count)
 	}
 }
+
+// TestLocalizedTextUpdatesMergeRatherThanReplace pins the semantics
+// documented on localizedText: an update naming one locale must leave the
+// others intact.
+//
+// This is the behaviour the admin API depends on — §8.1's write bodies
+// edit a single locale at a time, so a replacing update would make
+// "rename this in English" silently delete every translation. Worth a test
+// of its own because it is invisible in the Go signature: the merge lives
+// in the SQL.
+func TestLocalizedTextUpdatesMergeRatherThanReplace(t *testing.T) {
+	conn := testConn(t)
+	venueID := venueFixture(t, conn)
+	ctx := context.Background()
+
+	t.Run("category", func(t *testing.T) {
+		m := NewCategoryModel(conn)
+		created, err := m.Insert(ctx, venueID, localizedText{"en": "Drinks", "ru": "Напитки"}, 0, true, "")
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+
+		updated, err := m.Update(ctx, created.ID, venueID, localizedText{"en": "Beverages"}, 1, true, "")
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if updated.Name["en"] != "Beverages" {
+			t.Errorf("en = %q, want the new value", updated.Name["en"])
+		}
+		if updated.Name["ru"] != "Напитки" {
+			t.Errorf("ru = %q, want the untouched translation to survive", updated.Name["ru"])
+		}
+		if updated.SortOrder != 1 {
+			t.Errorf("non-localized fields should still be replaced outright: sortOrder = %d", updated.SortOrder)
+		}
+	})
+
+	t.Run("menu item name and description", func(t *testing.T) {
+		catModel := NewCategoryModel(conn)
+		cat, err := catModel.Insert(ctx, venueID, localizedText{"en": "Food"}, 0, true, "")
+		if err != nil {
+			t.Fatalf("insert category: %v", err)
+		}
+		m := NewMenuItemModel(conn)
+		created, err := m.Insert(ctx, venueID, cat.ID,
+			localizedText{"en": "Soup", "ru": "Суп"},
+			localizedText{"en": "Hot", "ru": "Горячий"},
+			500, "", nil, 0)
+		if err != nil {
+			t.Fatalf("insert item: %v", err)
+		}
+
+		updated, err := m.Update(ctx, created.ID, venueID, cat.ID,
+			localizedText{"en": "Broth"}, localizedText{"en": "Very hot"},
+			600, "", nil, 0)
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if updated.Name["en"] != "Broth" || updated.Name["ru"] != "Суп" {
+			t.Errorf("name = %v, want en updated and ru preserved", updated.Name)
+		}
+		if updated.Description["en"] != "Very hot" || updated.Description["ru"] != "Горячий" {
+			t.Errorf("description = %v, want en updated and ru preserved", updated.Description)
+		}
+		if updated.BasePriceMinor != 600 {
+			t.Errorf("price = %d, want 600", updated.BasePriceMinor)
+		}
+	})
+
+	t.Run("modifier group", func(t *testing.T) {
+		catModel := NewCategoryModel(conn)
+		cat, err := catModel.Insert(ctx, venueID, localizedText{"en": "Extras"}, 0, true, "")
+		if err != nil {
+			t.Fatalf("insert category: %v", err)
+		}
+		item, err := NewMenuItemModel(conn).Insert(ctx, venueID, cat.ID,
+			localizedText{"en": "Coffee"}, localizedText{"en": ""}, 300, "", nil, 0)
+		if err != nil {
+			t.Fatalf("insert item: %v", err)
+		}
+		m := NewModifierGroupModel(conn)
+		created, err := m.Insert(ctx, item.ID, localizedText{"en": "Milk", "ru": "Молоко"}, 0, 1, false)
+		if err != nil {
+			t.Fatalf("insert group: %v", err)
+		}
+
+		updated, err := m.Update(ctx, created.ID, item.ID, localizedText{"en": "Milk choice"}, 1, 2, true)
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if updated.Name["en"] != "Milk choice" || updated.Name["ru"] != "Молоко" {
+			t.Errorf("name = %v, want en updated and ru preserved", updated.Name)
+		}
+		if !updated.Required || updated.MaxSelect != 2 {
+			t.Errorf("scalar fields not applied: %+v", updated)
+		}
+	})
+}

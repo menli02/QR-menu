@@ -122,12 +122,15 @@ func (m *MenuItemModel) ListForMenu(ctx context.Context, venueID string) ([]Menu
 // Update changes catalog/content fields only — never is_active
 // (Deactivate) or is_available (SetAvailability), which have their own
 // narrower, more auditable entry points.
+//
+// name and description are *merged* into the stored translation maps
+// (JSONB `||`), not replaced — see jsonb.go for the rationale.
 func (m *MenuItemModel) Update(ctx context.Context, id, venueID, categoryID string, name, description localizedText, basePriceMinor int64, imageURL string, allergens []string, sortOrder int32) (*MenuItem, error) {
 	var item MenuItem
 	err := m.conn.QueryRowCtx(ctx, &item, `
 		UPDATE menu_items SET
-			category_id = $3, name = $4, description = $5, base_price_minor = $6,
-			image_url = $7, allergens = $8::text[], sort_order = $9
+			category_id = $3, name = name || $4::jsonb, description = description || $5::jsonb,
+			base_price_minor = $6, image_url = $7, allergens = $8::text[], sort_order = $9
 		WHERE id = $1 AND venue_id = $2
 		RETURNING `+menuItemCols,
 		id, venueID, categoryID, name, description, basePriceMinor, imageURL, pgTextArrayLiteral(allergens), sortOrder)

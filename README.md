@@ -49,12 +49,41 @@ make run-gateway    # in another — REST+WS on :8888
 `make help` lists every target, including `make proto` (regenerate contracts after
 editing a `.proto` file) and `make migrate-new svc=<name> name=<description>`.
 
+### Realtime (optional locally)
+
+`KafkaBrokers` is empty in every `etc/*.yaml`, which turns the outbox relay and
+the gateway's consumer off. Everything still works: services write outbox rows
+you can inspect in Postgres, sockets connect, and clients fall back to polling.
+Nothing tries to dial a broker that isn't there.
+
+To exercise the full push path:
+
+```sh
+make kafka-topics   # creates the §8.3 topics with their planned partition counts
+```
+
+then set `KafkaBrokers: ["127.0.0.1:9094"]` in `services/{order,catalog}/etc/*.yaml`
+and `services/gateway/etc/gateway-api.yaml`. (9094 is compose's host-reachable
+listener; services running *inside* compose use `kafka:9092`.)
+
+Topics are created explicitly rather than left to the broker's auto-creation:
+an auto-created topic gets one partition, which silently discards the partition
+plan that §8.3's per-key ordering guarantee depends on.
+
 ## CI and container images
 
 Every push/PR runs `.github/workflows/ci.yml` (`gofmt`, `go vet`, `go build`,
 `go test -race`, `golangci-lint`, `buf lint`/`buf breaking`) and
 `.github/workflows/docker.yml` (builds all 4 service images; pushes to GHCR
 only from `main` or a `v*` tag).
+
+The test job runs a real Postgres service container and applies the migrations
+before testing, so the model-layer integration suites actually execute rather
+than skipping. Those tests are where the concurrency behaviour lives — partial
+unique indexes, `ON CONFLICT` arbiters, compare-and-set updates,
+`FOR UPDATE SKIP LOCKED` — and they have caught several bugs that the unit
+tests passed straight over. A dedicated step fails the job if they skip, since
+a silent skip would otherwise look identical to a pass.
 
 Each service has its own multi-stage `Dockerfile` (distroless static
 runtime, non-root, ~18MB images). Build locally with:

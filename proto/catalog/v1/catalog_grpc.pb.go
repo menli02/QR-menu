@@ -25,6 +25,7 @@ const (
 	CatalogService_GetMenu_FullMethodName             = "/catalog.v1.CatalogService/GetMenu"
 	CatalogService_ResolveOrderItems_FullMethodName   = "/catalog.v1.CatalogService/ResolveOrderItems"
 	CatalogService_ResolveTable_FullMethodName        = "/catalog.v1.CatalogService/ResolveTable"
+	CatalogService_ResolveVenueBySlug_FullMethodName  = "/catalog.v1.CatalogService/ResolveVenueBySlug"
 	CatalogService_SetItemAvailability_FullMethodName = "/catalog.v1.CatalogService/SetItemAvailability"
 	CatalogService_GetVenueSettings_FullMethodName    = "/catalog.v1.CatalogService/GetVenueSettings"
 	CatalogService_UpdateVenueSettings_FullMethodName = "/catalog.v1.CatalogService/UpdateVenueSettings"
@@ -63,6 +64,18 @@ type CatalogServiceClient interface {
 	// ResolveTable validates a QR table_code + HMAC signature and returns the
 	// venue/table it maps to (docs/TZ.md FR-T2, FR-T4).
 	ResolveTable(ctx context.Context, in *ResolveTableRequest, opts ...grpc.CallOption) (*ResolveTableResponse, error)
+	// ResolveVenueBySlug maps a public venue slug to its id.
+	//
+	// The gateway needs this for staff login: docs/TZ.md §8.1 defines
+	// POST /auth/login as taking a venue_slug, while identity.Login takes a
+	// venue_id, and catalog owns the venues table. Without it, login cannot
+	// be implemented at all.
+	//
+	// Deliberately narrow — id and a little display context, nothing
+	// configurable. It is reachable before authentication (it backs the
+	// login screen), so it must not become a way to enumerate a venue's
+	// settings; GetVenueSettings stays the admin-authenticated read.
+	ResolveVenueBySlug(ctx context.Context, in *ResolveVenueBySlugRequest, opts ...grpc.CallOption) (*ResolveVenueBySlugResponse, error)
 	// SetItemAvailability toggles the stop-list ("86") state of a menu item.
 	SetItemAvailability(ctx context.Context, in *SetItemAvailabilityRequest, opts ...grpc.CallOption) (*SetItemAvailabilityResponse, error)
 	GetVenueSettings(ctx context.Context, in *GetVenueSettingsRequest, opts ...grpc.CallOption) (*VenueSettings, error)
@@ -124,6 +137,16 @@ func (c *catalogServiceClient) ResolveTable(ctx context.Context, in *ResolveTabl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveTableResponse)
 	err := c.cc.Invoke(ctx, CatalogService_ResolveTable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *catalogServiceClient) ResolveVenueBySlug(ctx context.Context, in *ResolveVenueBySlugRequest, opts ...grpc.CallOption) (*ResolveVenueBySlugResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveVenueBySlugResponse)
+	err := c.cc.Invoke(ctx, CatalogService_ResolveVenueBySlug_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +396,18 @@ type CatalogServiceServer interface {
 	// ResolveTable validates a QR table_code + HMAC signature and returns the
 	// venue/table it maps to (docs/TZ.md FR-T2, FR-T4).
 	ResolveTable(context.Context, *ResolveTableRequest) (*ResolveTableResponse, error)
+	// ResolveVenueBySlug maps a public venue slug to its id.
+	//
+	// The gateway needs this for staff login: docs/TZ.md §8.1 defines
+	// POST /auth/login as taking a venue_slug, while identity.Login takes a
+	// venue_id, and catalog owns the venues table. Without it, login cannot
+	// be implemented at all.
+	//
+	// Deliberately narrow — id and a little display context, nothing
+	// configurable. It is reachable before authentication (it backs the
+	// login screen), so it must not become a way to enumerate a venue's
+	// settings; GetVenueSettings stays the admin-authenticated read.
+	ResolveVenueBySlug(context.Context, *ResolveVenueBySlugRequest) (*ResolveVenueBySlugResponse, error)
 	// SetItemAvailability toggles the stop-list ("86") state of a menu item.
 	SetItemAvailability(context.Context, *SetItemAvailabilityRequest) (*SetItemAvailabilityResponse, error)
 	GetVenueSettings(context.Context, *GetVenueSettingsRequest) (*VenueSettings, error)
@@ -418,6 +453,9 @@ func (UnimplementedCatalogServiceServer) ResolveOrderItems(context.Context, *Res
 }
 func (UnimplementedCatalogServiceServer) ResolveTable(context.Context, *ResolveTableRequest) (*ResolveTableResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveTable not implemented")
+}
+func (UnimplementedCatalogServiceServer) ResolveVenueBySlug(context.Context, *ResolveVenueBySlugRequest) (*ResolveVenueBySlugResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveVenueBySlug not implemented")
 }
 func (UnimplementedCatalogServiceServer) SetItemAvailability(context.Context, *SetItemAvailabilityRequest) (*SetItemAvailabilityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetItemAvailability not implemented")
@@ -559,6 +597,24 @@ func _CatalogService_ResolveTable_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CatalogServiceServer).ResolveTable(ctx, req.(*ResolveTableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CatalogService_ResolveVenueBySlug_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveVenueBySlugRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).ResolveVenueBySlug(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_ResolveVenueBySlug_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).ResolveVenueBySlug(ctx, req.(*ResolveVenueBySlugRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -995,6 +1051,10 @@ var CatalogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveTable",
 			Handler:    _CatalogService_ResolveTable_Handler,
+		},
+		{
+			MethodName: "ResolveVenueBySlug",
+			Handler:    _CatalogService_ResolveVenueBySlug_Handler,
 		},
 		{
 			MethodName: "SetItemAvailability",

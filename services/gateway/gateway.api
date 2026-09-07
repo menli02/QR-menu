@@ -289,10 +289,18 @@ type TransitionOrderReq {
 	Reason string `json:"reason,optional"`
 }
 
+// OrderId is in the body because the route (§8.1) keys only on the item
+// id, while order.TransitionOrderItem needs the owning order too — it
+// scopes the item through its order so a caller can't transition a line
+// belonging to another venue. The KDS always has the order to hand: it is
+// rendering that ticket. Kept required rather than looked up, because no
+// RPC maps an item id back to its order and adding one would mean an
+// extra round trip on the hottest kitchen action.
 type TransitionOrderItemReq {
-	Id     string `path:"id"`
-	To     string `json:"to"`
-	Reason string `json:"reason,optional"`
+	Id      string `path:"id"`
+	OrderId string `json:"orderId"`
+	To      string `json:"to"`
+	Reason  string `json:"reason,optional"`
 }
 
 type SetItemAvailabilityReq {

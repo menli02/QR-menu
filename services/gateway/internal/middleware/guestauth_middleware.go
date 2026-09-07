@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -39,4 +40,19 @@ func (m *GuestAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		})
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// Verify checks a raw guest JWT and returns its claims. See
+// StaffAuthMiddleware.Verify for why the WebSocket path shares this rather
+// than verifying tokens of its own.
+func (m *GuestAuthMiddleware) Verify(ctx context.Context, token string) (GuestClaims, error) {
+	var claims guestJWTClaims
+	if err := verifyToken(ctx, m.cache, token, &claims); err != nil {
+		return GuestClaims{}, err
+	}
+	return GuestClaims{
+		VenueID:        claims.VenueID,
+		TableID:        claims.TableID,
+		GuestSessionID: claims.GuestSessionID,
+	}, nil
 }

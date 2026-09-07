@@ -6,6 +6,10 @@ package admin
 import (
 	"context"
 
+	v1_identitypb "github.com/menli02/QR-menu/proto/identity/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +31,22 @@ func NewListStaffLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ListSta
 }
 
 func (l *ListStaffLogic) ListStaff(req *types.ListStaffReq) (resp *types.ListStaffResp, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	return
+	list, err := l.svcCtx.IdentityRpc.ListStaff(l.ctx, &v1_identitypb.ListStaffRequest{
+		VenueId:  claims.VenueID,
+		Cursor:   req.Cursor,
+		PageSize: req.PageSize,
+	})
+	if err != nil {
+		return nil, rpcerr.From(err)
+	}
+
+	return &types.ListStaffResp{
+		Staff:      convert.StaffList(list.GetStaff()),
+		NextCursor: list.GetNextCursor(),
+	}, nil
 }

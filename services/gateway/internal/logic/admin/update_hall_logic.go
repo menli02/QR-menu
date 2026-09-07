@@ -6,6 +6,11 @@ package admin
 import (
 	"context"
 
+	v1_catalogpb "github.com/menli02/QR-menu/proto/catalog/v1"
+	"github.com/menli02/QR-menu/services/gateway/internal/authz"
+	"github.com/menli02/QR-menu/services/gateway/internal/convert"
+	"github.com/menli02/QR-menu/services/gateway/internal/errs"
+	"github.com/menli02/QR-menu/services/gateway/internal/rpcerr"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 	"github.com/menli02/QR-menu/services/gateway/internal/types"
 
@@ -27,7 +32,27 @@ func NewUpdateHallLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Update
 }
 
 func (l *UpdateHallLogic) UpdateHall(req *types.UpdateHallReq) (resp *types.Hall, err error) {
-	// todo: add your logic here and delete this line
+	claims, err := authz.Admin(l.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.Id == "" || req.Name == "" {
+		return nil, errs.New(errs.CodeValidationFailed, "hall id and name are required")
+	}
 
-	return
+	hall, err := l.svcCtx.CatalogRpc.UpdateHall(l.ctx, &v1_catalogpb.UpdateHallRequest{
+		Hall: &v1_catalogpb.Hall{
+			Id:        req.Id,
+			VenueId:   claims.VenueID,
+			Name:      req.Name,
+			SortOrder: req.SortOrder,
+			IsActive:  req.IsActive,
+		},
+	})
+	if err != nil {
+		return nil, rpcerr.FromCatalog(err)
+	}
+
+	out := convert.Hall(hall)
+	return &out, nil
 }

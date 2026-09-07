@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -41,4 +42,25 @@ func (m *StaffAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		})
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// Verify checks a raw staff JWT and returns its claims.
+//
+// It exists for the WebSocket endpoints, which receive the token in their
+// first frame rather than an Authorization header (docs/TZ.md §8.1 —
+// keeping it out of proxy access logs and browser history). Sharing this
+// method rather than duplicating verification means the socket path gets
+// the same JWKS cache, the same alg-confusion rejection and the same
+// expiry handling as every REST route; a second implementation is exactly
+// where those protections go missing.
+func (m *StaffAuthMiddleware) Verify(ctx context.Context, token string) (StaffClaims, error) {
+	var claims staffJWTClaims
+	if err := verifyToken(ctx, m.cache, token, &claims); err != nil {
+		return StaffClaims{}, err
+	}
+	return StaffClaims{
+		StaffID: claims.Subject,
+		VenueID: claims.VenueID,
+		Role:    claims.Role,
+	}, nil
 }

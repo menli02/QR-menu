@@ -23,6 +23,19 @@ service CatalogService {
   // venue/table it maps to (docs/TZ.md FR-T2, FR-T4).
   rpc ResolveTable(ResolveTableRequest) returns (ResolveTableResponse);
 
+  // ResolveVenueBySlug maps a public venue slug to its id.
+  //
+  // The gateway needs this for staff login: docs/TZ.md §8.1 defines
+  // POST /auth/login as taking a venue_slug, while identity.Login takes a
+  // venue_id, and catalog owns the venues table. Without it, login cannot
+  // be implemented at all.
+  //
+  // Deliberately narrow — id and a little display context, nothing
+  // configurable. It is reachable before authentication (it backs the
+  // login screen), so it must not become a way to enumerate a venue's
+  // settings; GetVenueSettings stays the admin-authenticated read.
+  rpc ResolveVenueBySlug(ResolveVenueBySlugRequest) returns (ResolveVenueBySlugResponse);
+
   // ---- Kitchen / floor (staff-facing) ----
 
   // SetItemAvailability toggles the stop-list ("86") state of a menu item.
@@ -245,6 +258,16 @@ message ResolveTableResponse {
   bool table_is_active = 5;
   bool sig_valid = 6;
   bool key_version_expired = 7; // valid but outside the rotation grace period
+}
+
+message ResolveVenueBySlugRequest {
+  string slug = 1;
+}
+message ResolveVenueBySlugResponse {
+  string venue_id = 1;
+  string name = 2;
+  string default_locale = 3;
+  string currency = 4;
 }
 
 // ---- Staff/KDS: SetItemAvailability ----

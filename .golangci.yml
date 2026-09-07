@@ -1,0 +1,22 @@
+# golangci-lint configuration.
+#
+# The version here must match the one pinned in .github/workflows/ci.yml,
+# so a run that is clean locally is clean in CI.
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # go-zero's conf package reads struct tags out of the `json` tag and
+      # adds options of its own — `optional` marks a config field that may
+      # be absent from the YAML, and without it conf.MustLoad refuses to
+      # start. staticcheck only knows encoding/json's option set, so it
+      # reports every one of those as SA5008 "unknown JSON option".
+      #
+      # Scoped to the config packages, which are the only place go-zero
+      # parses tags this way: an unknown json option anywhere else really
+      # is a bug and should still be reported.
+      - path: internal/config/config\.go
+        linters:
+          - staticcheck
+        text: "SA5008"

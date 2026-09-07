@@ -28,13 +28,13 @@ type Config struct {
 	// the relay, which is the right local-dev default: outbox rows still
 	// accumulate and can be inspected, nothing tries to reach a broker
 	// that isn't there.
-	KafkaBrokers []string
+	KafkaBrokers []string `json:",optional"`
 
 	// Outbox tunes the relay goroutine (see pkg/outbox). Defaults are
 	// applied for any field left at zero.
 	Outbox struct {
-		PollIntervalMs int
-		BatchSize      int
-		MaxAttempts    int
+		PollIntervalMs int `json:",optional"`
+		BatchSize      int `json:",optional"`
+		MaxAttempts    int `json:",optional"`
 	}
 }

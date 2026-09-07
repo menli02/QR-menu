@@ -48,6 +48,8 @@ type (
 	ResolveOrderItemsResponse   = v1_catalogpb.ResolveOrderItemsResponse
 	ResolveTableRequest         = v1_catalogpb.ResolveTableRequest
 	ResolveTableResponse        = v1_catalogpb.ResolveTableResponse
+	ResolveVenueBySlugRequest   = v1_catalogpb.ResolveVenueBySlugRequest
+	ResolveVenueBySlugResponse  = v1_catalogpb.ResolveVenueBySlugResponse
 	RotateVenueQRKeyRequest     = v1_catalogpb.RotateVenueQRKeyRequest
 	RotateVenueQRKeyResponse    = v1_catalogpb.RotateVenueQRKeyResponse
 	SetItemAvailabilityRequest  = v1_catalogpb.SetItemAvailabilityRequest
@@ -68,6 +70,8 @@ type (
 		ResolveOrderItems(ctx context.Context, in *ResolveOrderItemsRequest, opts ...grpc.CallOption) (*ResolveOrderItemsResponse, error)
 		// ResolveTable validates a QR table_code + HMAC signature and returns the
 		ResolveTable(ctx context.Context, in *ResolveTableRequest, opts ...grpc.CallOption) (*ResolveTableResponse, error)
+		// ResolveVenueBySlug maps a public venue slug to its id.
+		ResolveVenueBySlug(ctx context.Context, in *ResolveVenueBySlugRequest, opts ...grpc.CallOption) (*ResolveVenueBySlugResponse, error)
 		// SetItemAvailability toggles the stop-list ("86") state of a menu item.
 		SetItemAvailability(ctx context.Context, in *SetItemAvailabilityRequest, opts ...grpc.CallOption) (*SetItemAvailabilityResponse, error)
 		GetVenueSettings(ctx context.Context, in *GetVenueSettingsRequest, opts ...grpc.CallOption) (*VenueSettings, error)
@@ -122,6 +126,12 @@ func (m *defaultCatalogService) ResolveOrderItems(ctx context.Context, in *Resol
 func (m *defaultCatalogService) ResolveTable(ctx context.Context, in *ResolveTableRequest, opts ...grpc.CallOption) (*ResolveTableResponse, error) {
 	client := v1_catalogpb.NewCatalogServiceClient(m.cli.Conn())
 	return client.ResolveTable(ctx, in, opts...)
+}
+
+// ResolveVenueBySlug maps a public venue slug to its id.
+func (m *defaultCatalogService) ResolveVenueBySlug(ctx context.Context, in *ResolveVenueBySlugRequest, opts ...grpc.CallOption) (*ResolveVenueBySlugResponse, error) {
+	client := v1_catalogpb.NewCatalogServiceClient(m.cli.Conn())
+	return client.ResolveVenueBySlug(ctx, in, opts...)
 }
 
 // SetItemAvailability toggles the stop-list ("86") state of a menu item.

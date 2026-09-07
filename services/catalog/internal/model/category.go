@@ -75,10 +75,13 @@ func (m *CategoryModel) ListVisible(ctx context.Context, venueID string) ([]Cate
 	return rows, nil
 }
 
+// Update merges `name` into the stored translation map (JSONB `||`)
+// rather than replacing it — see the note on localizedText merge semantics
+// in jsonb.go for why, and for what that costs.
 func (m *CategoryModel) Update(ctx context.Context, id, venueID string, name localizedText, sortOrder int32, isVisible bool, imageURL string) (*Category, error) {
 	var c Category
 	err := m.conn.QueryRowCtx(ctx, &c, `
-		UPDATE categories SET name = $3, sort_order = $4, is_visible = $5, image_url = $6
+		UPDATE categories SET name = name || $3::jsonb, sort_order = $4, is_visible = $5, image_url = $6
 		WHERE id = $1 AND venue_id = $2
 		RETURNING `+categoryCols,
 		id, venueID, name, sortOrder, isVisible, imageURL)

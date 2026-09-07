@@ -35,3 +35,19 @@ Redis:
   Type: node
 
 JWKSRefreshSeconds: 300
+
+# Realtime push (docs/TZ.md §7.3). Empty brokers disables it: REST works,
+# sockets connect and receive nothing, and clients fall back to polling —
+# a usable local-dev state. To exercise it, run `make kafka-topics` and set
+# this to ["127.0.0.1:9094"] (compose's host-reachable listener; inside
+# compose use ["kafka:9092"]).
+KafkaBrokers: []
+# Every gateway instance consumes with its OWN group so all of them see
+# every event — a socket lives on exactly one pod. InstanceID defaults to
+# HOSTNAME, which Kubernetes sets to the pod name.
+KafkaGroupPrefix: gateway
+
+# WebSocket handshake origin allow-list. Empty permits same-origin only,
+# which is right when the frontends are served from this host. Browsers do
+# not apply the same-origin policy to WebSocket upgrades, so this matters.
+WSAllowedOrigins: []

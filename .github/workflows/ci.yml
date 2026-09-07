@@ -12,6 +12,38 @@ jobs:
   build-test:
     name: Build, vet, test
     runs-on: ubuntu-latest
+
+    # A real Postgres, because the tests that matter most cannot be run
+    # against anything else. Partial unique indexes used as concurrency
+    # control, ON CONFLICT arbiters, compare-and-set UPDATEs, FOR UPDATE
+    # SKIP LOCKED, JSONB merge semantics, the atomic order-number counter —
+    # every one of those is behaviour Postgres provides, and a mock would
+    # only re-assert what the mock was written to do.
+    #
+    # This is not hypothetical: the integration suite has already caught
+    # four bugs that unit tests passed straight over (keyset-pagination
+    # UUID typing, QR-key rotation ordering against the one-current-key
+    # index, Postgres array/JSONB scanning, and a nullable sum() scan).
+    # Until this job existed, none of those tests ran in CI at all.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: qrmenu
+          POSTGRES_PASSWORD: qrmenu
+          POSTGRES_DB: postgres
+        ports:
+          # 5437 on the host, matching deploy/docker-compose.yml, so the
+          # DSNs in the tests are identical locally and in CI. A test that
+          # needs a different connection string in CI is a test that will
+          # eventually only pass in one of the two places.
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U qrmenu"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +51,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # The compose file does this with an entrypoint script; the service
+      # container has no equivalent hook, so it is repeated here. Keep the
+      # two in step — deploy/postgres-init/01-databases.sh is the original.
+      - name: Create per-service databases
+        env:
+          PGPASSWORD: qrmenu
+        run: |
+          for db in catalog_db order_db identity_db; do
+            psql -h 127.0.0.1 -p 5437 -U qrmenu -d postgres -v ON_ERROR_STOP=1 \
+              -c "CREATE DATABASE $db OWNER qrmenu"
+            psql -h 127.0.0.1 -p 5437 -U qrmenu -d "$db" -v ON_ERROR_STOP=1 \
+              -c "CREATE EXTENSION IF NOT EXISTS pgcrypto"
+          done
+
+      - name: Install golang-migrate
+        # Pinned to the version the migrations were authored and run
+        # against locally.
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+
+      - name: Apply migrations
+        run: make migrate-up
 
       - name: gofmt
         run: |
@@ -35,8 +89,22 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # With Postgres up, the model-layer suites no longer skip. If the
+      # database were unreachable they would skip silently and this job
+      # would still pass, so the guard below asserts they actually ran.
       - name: go test
         run: go test ./... -race -cover
+
+      - name: Assert the integration tests were not skipped
+        run: |
+          out="$(go test ./services/order/internal/model/ ./services/catalog/internal/model/ \
+                        ./services/identity/internal/model/ ./pkg/outbox/ -count=1 -v 2>&1)"
+          if echo "$out" | grep -q "not reachable"; then
+            echo "::error::integration tests skipped — Postgres was not reachable, so this job proved nothing"
+            echo "$out" | grep "not reachable" | head -5
+            exit 1
+          fi
+          echo "$out" | grep -c '^--- PASS' | xargs echo "integration tests passed:"
 
   golangci-lint:
     name: golangci-lint
