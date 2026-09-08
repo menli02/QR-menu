@@ -1,0 +1,82 @@
+# Schema migrations, run as a Job before a rollout.
+#
+# A Job rather than an init container on each Deployment. Three replicas
+# starting at once would each run migrate against the same database;
+# golang-migrate takes an advisory lock so that is survivable, but it means
+# two pods sit waiting on a lock during every rollout and a failed
+# migration is reported three times in three different places. One Job
+# fails once, visibly, and blocks the rollout that follows it.
+#
+# It is deliberately NOT part of kustomization.yaml: `kubectl apply -k`
+# should be safe to re-run, and re-applying a completed Job is an error.
+# Run it explicitly as part of the deploy pipeline:
+#
+#   kubectl -n qrmenu delete job qrmenu-migrate --ignore-not-found
+#   kubectl -n qrmenu apply -f deploy/k8s/migrate-job.yaml
+#   kubectl -n qrmenu wait --for=condition=complete job/qrmenu-migrate --timeout=5m
+#
+# Ordering matters and is the operator's responsibility: every migration
+# committed so far is additive (new tables, new nullable columns, new
+# indexes), so migrate-then-deploy is safe. A future migration that drops
+# or renames anything needs the expand/contract treatment — ship the
+# column addition and the code that tolerates both, then remove the old
+# column in a later release — because during any rollout both versions are
+# running at once.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qrmenu-migrate
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: migrate}
+spec:
+  backoffLimit: 2
+  # Clean up on its own so the next deploy's delete is a formality rather
+  # than a requirement.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: migrate}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: qrmenu
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          # golang-migrate plus this repo's SQL, built from
+          # migrations/Dockerfile. The tag is set by the deploy pipeline to
+          # the same commit as the services, so the schema and the code
+          # that expects it are promoted and rolled back together.
+          image: ghcr.io/menli02/qr-menu-migrate:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          env:
+            - name: CATALOG_DSN
+              valueFrom: {secretKeyRef: {name: migrate-secrets, key: catalog-dsn}}
+            - name: ORDER_DSN
+              valueFrom: {secretKeyRef: {name: migrate-secrets, key: order-dsn}}
+            - name: IDENTITY_DSN
+              valueFrom: {secretKeyRef: {name: migrate-secrets, key: identity-dsn}}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              for svc in catalog order identity; do
+                echo "==> $svc"
+                case "$svc" in
+                  catalog)  dsn="$CATALOG_DSN" ;;
+                  order)    dsn="$ORDER_DSN" ;;
+                  identity) dsn="$IDENTITY_DSN" ;;
+                esac
+                migrate -path "/migrations/$svc" -database "$dsn" up
+              done
+              echo "all migrations applied"

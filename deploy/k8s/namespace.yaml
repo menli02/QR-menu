@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qrmenu
+  labels:
+    app.kubernetes.io/part-of: qrmenu
+    # Enforce the restricted Pod Security Standard at the namespace level
+    # rather than trusting every future manifest to get its securityContext
+    # right. A pod that asks for privilege is rejected at admission, which
+    # is the only place that check cannot be forgotten.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: qrmenu
+  namespace: qrmenu
+# None of these services talk to the Kubernetes API, so they get no token.
+# Mounting one by default hands every pod a credential it has no use for
+# and an attacker every reason to look for.
+automountServiceAccountToken: false

@@ -1,0 +1,201 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: gateway}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+      annotations:
+        checksum/config: "REPLACE_ON_APPLY"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6060"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: qrmenu
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        # The only publicly reachable component, so it gets the strict
+        # constraint the rpc services do not: refuse to schedule rather
+        # than pile replicas onto one node. Losing that node would
+        # otherwise take the whole public surface with it.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      containers:
+        - name: gateway
+          image: ghcr.io/menli02/qr-menu-gateway:latest
+          args: ["-f", "/app/etc/gateway-api.yaml"]
+          ports:
+            - {name: http, containerPort: 8888}
+            - {name: admin, containerPort: 6060}
+            - {name: readiness, containerPort: 6061}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: gateway-secrets, key: redis-password}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            # "Scales with connections, not with business load"
+            # (docs/TZ.md §7.1): each held WebSocket costs two goroutines
+            # and a send buffer, so memory is the dimension that grows.
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /readyz, port: readiness}
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: {path: /healthz, port: admin}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /healthz, port: admin}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # Endpoint removal and SIGTERM race: kube-proxy and the
+              # ingress learn the pod is going away asynchronously, so
+              # without a pause the process can stop accepting while
+              # requests are still being routed to it. Sleeping first lets
+              # the dataplane catch up, and only then does the graceful
+              # shutdown begin.
+              #
+              # exec rather than an httpGet hook because distroless has no
+              # shell — /bin/sleep is not there either, so this uses the
+              # native sleep action (Kubernetes 1.29+). On an older
+              # cluster, delete this block and accept a few seconds of
+              # connection resets per rollout, or switch to a base image
+              # that has a shell.
+              sleep:
+                seconds: 10
+          volumeMounts:
+            - {name: config, mountPath: /app/etc, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: gateway-config}
+      # The longest of the four, because this pod holds WebSockets. A
+      # client that is cut off reconnects and re-fetches over REST
+      # (docs/TZ.md §7.3 makes sockets an optimisation, never the source of
+      # truth), so nothing is lost — but a KDS screen going briefly blank
+      # mid-service is worth 60 seconds of patience during a rollout.
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+spec:
+  type: ClusterIP
+  # A real ClusterIP here, unlike the rpc services: this one is fronted by
+  # an ingress speaking HTTP, not by etcd-based client-side balancing.
+  selector: {app.kubernetes.io/name: gateway}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: admin, port: 6060, targetPort: admin}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+  annotations:
+    # Written for ingress-nginx. Adjust for whatever controller the cluster
+    # actually runs; the timeouts below are the part that matters and they
+    # have controller-specific spellings.
+    #
+    # WebSockets need a read timeout longer than the 25s server-side ping
+    # interval, or the proxy severs an idle-looking socket the application
+    # considers perfectly healthy. 3600s gives a KDS screen an hour of
+    # quiet before the proxy interferes.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Matches the browser->gateway budget in docs/TZ.md §7.4.
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # The gateway derives the client IP for per-IP rate limiting from
+    # X-Forwarded-For and trusts it (see internal/reqctx). That trust is
+    # only sound because this controller overwrites the header — if the
+    # ingress is ever replaced with one that appends instead, the rate
+    # limit becomes spoofable.
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [api.example.com]
+      secretName: gateway-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port: {name: http}
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port: {name: http}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: gateway}
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      # Slow to scale down, because scaling down here means dropping live
+      # WebSockets. A five-minute window keeps a brief lull from
+      # disconnecting every KDS screen in the venue.
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - {type: Percent, value: 100, periodSeconds: 30}

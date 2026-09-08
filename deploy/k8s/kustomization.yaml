@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: qrmenu
+
+# Deliberately excluded from this list:
+#
+#   secrets.example.yaml — placeholders. Applying it would overwrite real
+#     credentials with the string "<DB_PASSWORD>", and the services would
+#     fail their startup probes with a confusing authentication error.
+#
+#   migrate-job.yaml — a Job is immutable once created, so re-applying it
+#     errors. Run it explicitly before a rollout; see the header of that
+#     file.
+resources:
+  - namespace.yaml
+  - configmaps.yaml
+  - identity.yaml
+  - catalog.yaml
+  - order.yaml
+  - gateway.yaml
+  - networkpolicy.yaml
+  - poddisruptionbudgets.yaml
+
+# `labels` rather than the deprecated `commonLabels`, and with
+# includeSelectors false on purpose: a Deployment's spec.selector is
+# immutable, so a generator that rewrites selectors turns the next upgrade
+# of an already-deployed workload into a rejected apply.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: qrmenu
+      app.kubernetes.io/managed-by: kustomize
+
+# Tags are set by the deploy pipeline, not committed. `:latest` in the
+# Deployment manifests is a placeholder that should never reach a real
+# cluster — an image tag you cannot name is a rollback you cannot perform.
+# Override per environment with:
+#   kustomize edit set image ghcr.io/menli02/qr-menu-gateway=...:<sha>
+images:
+  - name: ghcr.io/menli02/qr-menu-migrate
+    newTag: latest
+  - name: ghcr.io/menli02/qr-menu-identity
+    newTag: latest
+  - name: ghcr.io/menli02/qr-menu-catalog
+    newTag: latest
+  - name: ghcr.io/menli02/qr-menu-order
+    newTag: latest
+  - name: ghcr.io/menli02/qr-menu-gateway
+    newTag: latest

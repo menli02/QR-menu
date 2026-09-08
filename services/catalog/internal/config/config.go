@@ -37,4 +37,9 @@ type Config struct {
 		BatchSize      int `json:",optional"`
 		MaxAttempts    int `json:",optional"`
 	}
+
+	// ReadinessPort serves GET /readyz, the dependency-aware check behind
+	// the Kubernetes startup probe (see pkg/health). Defaults to 6061 when
+	// unset — 6060 is go-zero's own admin server.
+	ReadinessPort int `json:",default=6061"`
 }

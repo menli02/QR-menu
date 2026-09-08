@@ -93,8 +93,35 @@ make docker-build   # builds qrmenu-{gateway,catalog,order,identity}:local
 ```
 
 The config baked into each image is the local-dev `etc/*.yaml` — production
-values come from a Kubernetes ConfigMap/Secret mounted at the same path
-(`deploy/k8s`, not yet written; see docs/TZ.md §7.1).
+values come from a Kubernetes ConfigMap/Secret mounted at the same path.
+
+A fifth image, `qr-menu-migrate`, packages golang-migrate together with this
+repo's SQL, so the schema is promoted and rolled back on the same tag as the
+code that expects it.
+
+## Deploying
+
+`deploy/k8s` holds the manifests: four Deployments, headless Services for the
+rpc trio, an Ingress and HPA for the gateway, NetworkPolicies, PodDisruption
+Budgets and a migration Job. See [deploy/k8s/README.md](deploy/k8s/README.md)
+for the deploy sequence and the reasoning behind the less obvious choices —
+in particular why the database check drives the *startup* probe and not the
+readiness probe, and why the rpc Services are headless.
+
+Stateful dependencies (Postgres, Kafka, Redis, MinIO, etcd) are deliberately
+not included; run them from an operator or as managed services and point the
+ConfigMaps at them.
+
+Every service exposes two probe endpoints:
+
+| Port | Path | Depends on | Used for |
+|---|---|---|---|
+| 6060 | `/healthz` | nothing | liveness, readiness |
+| 6060 | `/metrics` | nothing | Prometheus |
+| 6061 | `/readyz` | Postgres (gateway: etcd) | startup probe |
+
+Locally those ports differ per service, since all four run on one host —
+identity 6060/6061, catalog 6062/6063, order 6064/6065, gateway 6066/6067.
 
 ## Public repository
 

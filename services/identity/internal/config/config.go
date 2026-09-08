@@ -31,4 +31,9 @@ type Config struct {
 		RefreshExpireSeconds int64
 		GuestTokenTTLSeconds int64
 	}
+
+	// ReadinessPort serves GET /readyz, the dependency-aware check behind
+	// the Kubernetes startup probe (see pkg/health). Defaults to 6061 when
+	// unset — 6060 is go-zero's own admin server.
+	ReadinessPort int `json:",default=6061"`
 }

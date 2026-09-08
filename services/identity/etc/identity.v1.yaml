@@ -21,3 +21,24 @@ JWT:
   AccessExpireSeconds: 900       # staff access token, 15 min
   RefreshExpireSeconds: 604800   # staff refresh token, 7 days
   GuestTokenTTLSeconds: 14400    # guest token, 4h sliding (FR-O1)
+
+# go-zero's admin server: /healthz (liveness) and /metrics (Prometheus).
+# Ports differ per service because local dev runs all four on one
+# host; the Kubernetes ConfigMaps use a uniform 6060/6061, since each
+# pod has its own network namespace (see deploy/k8s).
+# It must be declared explicitly — its fields carry defaults, but with the
+# whole block absent go-zero never descends into it and the server does not
+# start at all. Verified: without this, nothing listens on 6060.
+DevServer:
+  Enabled: true
+  Port: 6060
+  HealthPath: /healthz
+  MetricsPath: /metrics
+  EnableMetrics: true
+  # pprof stays on: this port is never exposed outside the cluster (see
+  # deploy/k8s), and a heap profile from a misbehaving pod is worth far
+  # more than the bytes the handler costs.
+  EnablePprof: true
+
+# GET /readyz — dependency-aware, drives the Kubernetes startup probe.
+ReadinessPort: 6061

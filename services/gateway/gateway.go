@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/menli02/QR-menu/pkg/health"
 	"github.com/menli02/QR-menu/services/gateway/internal/config"
 	"github.com/menli02/QR-menu/services/gateway/internal/consumer"
 	"github.com/menli02/QR-menu/services/gateway/internal/errs"
@@ -53,10 +54,24 @@ func main() {
 		InstanceID:  c.KafkaInstanceID,
 	})
 
+	// The gateway owns no database; what it cannot start usefully without
+	// is its downstream services, and those are discovered through etcd.
+	// See pkg/health for why this drives the startup probe only.
+	ready := health.NewServer(c.ReadinessPort)
+	if hosts := c.IdentityRpc.Etcd.Hosts; len(hosts) > 0 {
+		// One endpoint is enough: this asks whether service discovery is
+		// reachable at all, which is what a freshly scheduled pod needs to
+		// prove. Checking every member would turn a single etcd node being
+		// down — which the cluster tolerates by design — into a failed
+		// rollout.
+		ready.Register("etcd", health.TCPCheck(hosts[0]))
+	}
+
 	group := service.NewServiceGroup()
 	defer group.Stop()
 	group.Add(server)
 	group.Add(realtime)
+	group.Add(ready)
 
 	fmt.Printf("Starting server at %s:%d...\n", c.Host, c.Port)
 	group.Start()

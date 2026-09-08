@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/menli02/QR-menu/pkg/health"
 	"github.com/menli02/QR-menu/proto/identity/v1"
 	"github.com/menli02/QR-menu/services/identity/internal/config"
 	identityserviceServer "github.com/menli02/QR-menu/services/identity/internal/server/identityservice"
@@ -32,8 +33,17 @@ func main() {
 			reflection.Register(grpcServer)
 		}
 	})
-	defer s.Stop()
+
+	// See services/order/order.v1.go for why this drives the startup probe
+	// rather than the readiness probe.
+	ready := health.NewServer(c.ReadinessPort)
+	ready.Register("postgres", health.PostgresCheck(ctx.DB))
+
+	group := service.NewServiceGroup()
+	defer group.Stop()
+	group.Add(s)
+	group.Add(ready)
 
 	fmt.Printf("Starting rpc server at %s...\n", c.ListenOn)
-	s.Start()
+	group.Start()
 }

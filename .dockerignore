@@ -6,8 +6,16 @@
 web/
 deploy/
 docs/
-migrations/
 *.md
+
+# The four Go services do not need the SQL, but migrations/Dockerfile
+# builds from this same repo-root context and does. Excluded, then the one
+# directory it needs is un-ignored: the alternative is a second context
+# root, and the few KiB of SQL is not worth one.
+migrations/*
+!migrations/catalog/
+!migrations/order/
+!migrations/identity/
 
 .idea/
 .vscode/

@@ -1,0 +1,56 @@
+# Pod disruption budgets.
+#
+# These constrain *voluntary* disruption — a node drain, a cluster
+# upgrade — not crashes. Without them, draining a node during service can
+# evict every replica of a service at once, and Kubernetes will happily do
+# it because nothing told it not to.
+#
+# minAvailable: 1 rather than a percentage, deliberately. A percentage of a
+# 2-replica Deployment rounds in ways that are easy to get wrong, and the
+# property actually wanted here is simple: never zero.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: qrmenu
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: gateway}
+  # Two, not one: this is the only public entrypoint, and every eviction
+  # takes its live WebSockets with it. Keeping two up means a drain never
+  # concentrates every guest and KDS screen in the venue onto a single pod.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: identity
+  namespace: qrmenu
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: identity}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog
+  namespace: qrmenu
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: catalog}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order
+  namespace: qrmenu
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: order}
+  # Two for the transactional core as well. An order in flight is a
+  # customer standing at a table; losing the last replica mid-service is a
+  # different class of problem from losing a menu read.

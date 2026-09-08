@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/menli02/QR-menu/pkg/health"
 	"github.com/menli02/QR-menu/pkg/outbox"
 	"github.com/menli02/QR-menu/proto/order/v1"
 	"github.com/menli02/QR-menu/services/order/internal/config"
@@ -49,10 +50,18 @@ func main() {
 		Source:       c.Name,
 	})
 
+	// Readiness reports whether this pod can reach order_db. It drives the
+	// Kubernetes startup probe, not the readiness probe — see pkg/health
+	// for why binding a shared database to readiness turns one outage into
+	// a cluster-wide blackout.
+	ready := health.NewServer(c.ReadinessPort)
+	ready.Register("postgres", health.PostgresCheck(ctx.DB))
+
 	group := service.NewServiceGroup()
 	defer group.Stop()
 	group.Add(s)
 	group.Add(relay)
+	group.Add(ready)
 
 	fmt.Printf("Starting rpc server at %s...\n", c.ListenOn)
 	group.Start()

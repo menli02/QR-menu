@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/menli02/QR-menu/pkg/health"
 	"github.com/menli02/QR-menu/pkg/outbox"
 	"github.com/menli02/QR-menu/proto/catalog/v1"
 	"github.com/menli02/QR-menu/services/catalog/internal/config"
@@ -47,10 +48,16 @@ func main() {
 		Source:       c.Name,
 	})
 
+	// See services/order/order.v1.go for why this drives the startup probe
+	// rather than the readiness probe.
+	ready := health.NewServer(c.ReadinessPort)
+	ready.Register("postgres", health.PostgresCheck(ctx.DB))
+
 	group := service.NewServiceGroup()
 	defer group.Stop()
 	group.Add(s)
 	group.Add(relay)
+	group.Add(ready)
 
 	fmt.Printf("Starting rpc server at %s...\n", c.ListenOn)
 	group.Start()

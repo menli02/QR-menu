@@ -1,0 +1,107 @@
+# Network policy for the qrmenu namespace.
+#
+# The shape follows docs/TZ.md §7.1's one hard rule: the gateway is the
+# only publicly exposed component. Everything else should be unreachable
+# from outside the namespace, and the call graph inside it is small and
+# known — gateway to all three rpc services, order to catalog, and that is
+# all. Writing it down as policy turns "nothing else should call order"
+# from a diagram into something the cluster enforces.
+#
+# Requires a CNI that implements NetworkPolicy (Calico, Cilium). On a CNI
+# that does not, these objects apply cleanly and do nothing at all, which
+# is the dangerous failure mode — verify with a deliberate connection
+# attempt, not by checking that kubectl accepted the manifest.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: qrmenu
+spec:
+  # Deny first, then allow specific paths below. The alternative — listing
+  # what to block — fails open for anything nobody thought of.
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: qrmenu
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: gateway}
+  policyTypes: [Ingress]
+  ingress:
+    # Public traffic, but only via the ingress controller.
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      ports:
+        - {protocol: TCP, port: 8888}
+    # Prometheus scraping the admin port.
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {protocol: TCP, port: 6060}
+    # The kubelet's probes come from the node, not a pod, so they are not
+    # matched by any namespaceSelector. Most CNIs exempt them; Calico does
+    # not always. If probes start failing after applying this, that is the
+    # cause — allow the node CIDR here rather than widening the rules
+    # above.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpc-services-ingress
+  namespace: qrmenu
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [identity, catalog, order]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Only the gateway and the order service originate internal calls
+        # (order -> catalog for pricing). Listing both here rather than
+        # allowing the whole namespace means a future service cannot reach
+        # the transactional core by accident.
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: order}
+      ports:
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 8082}
+        - {protocol: TCP, port: 8083}
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {protocol: TCP, port: 6060}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns-and-namespace
+  namespace: qrmenu
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # DNS. Without this every other egress rule is useless, because the
+    # pod cannot resolve the name it is trying to reach — and the symptom
+    # is a confusing timeout rather than a permission error.
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # Everything else these services talk to — Postgres, Redis, Kafka,
+    # MinIO, etcd — lives in this namespace.
+    - to:
+        - podSelector: {}

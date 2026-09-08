@@ -1,0 +1,209 @@
+# Per-service configuration, mounted over the local-dev etc/*.yaml baked
+# into each image.
+#
+# Two conventions run through all four, and both matter:
+#
+#   1. No secret appears here. go-zero expands $VARS in a config file
+#      through os.ExpandEnv before parsing, so every credential is written
+#      as ${SOMETHING} and injected from a Secret as an environment
+#      variable. A ConfigMap is world-readable to anything with namespace
+#      get access; a password in one is a password published.
+#
+#   2. The admin and readiness ports are a uniform 6060/6061, unlike the
+#      committed local-dev files where they differ per service. Each pod
+#      has its own network namespace, so there is nothing to collide with,
+#      and one set of numbers keeps the probes and any PodMonitor
+#      identical across services.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-config
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: identity}
+data:
+  identity.v1.yaml: |
+    Name: identity.rpc
+    # Not dev: reflection stays off outside local development. It is a
+    # free description of every RPC and message in the service.
+    Mode: pro
+    ListenOn: 0.0.0.0:8081
+    Etcd:
+      Hosts:
+      - etcd.qrmenu.svc.cluster.local:2379
+      Key: identity.rpc
+    Timeout: 3000
+
+    Postgres:
+      DataSource: ${IDENTITY_POSTGRES_DSN}
+
+    JWT:
+      # A file from a Secret, never generated in-pod. Every replica must
+      # sign with the SAME key: authkey.LoadOrCreatePrivateKey would
+      # otherwise create a different one per pod, and each new pod would
+      # demote the previous active signing key in the database. Mounted
+      # read-only, which also means the read-only root filesystem cannot
+      # be the thing that surfaces this mistake.
+      PrivateKeyPath: /etc/identity/keys/signing-key.pem
+      AccessExpireSeconds: 900       # staff access token, 15 min
+      RefreshExpireSeconds: 604800   # staff refresh token, 7 days
+      GuestTokenTTLSeconds: 14400    # guest token, 4h sliding (FR-O1)
+
+    DevServer:
+      Enabled: true
+      Port: 6060
+      HealthPath: /healthz
+      MetricsPath: /metrics
+      EnableMetrics: true
+      EnablePprof: true
+    ReadinessPort: 6061
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-config
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: catalog}
+data:
+  catalog.v1.yaml: |
+    Name: catalog.rpc
+    Mode: pro
+    ListenOn: 0.0.0.0:8082
+    Etcd:
+      Hosts:
+      - etcd.qrmenu.svc.cluster.local:2379
+      Key: catalog.rpc
+    Timeout: 3000
+
+    Postgres:
+      DataSource: ${CATALOG_POSTGRES_DSN}
+
+    MinIO:
+      Endpoint: minio.qrmenu.svc.cluster.local:9000
+      AccessKey: ${MINIO_ACCESS_KEY}
+      SecretKey: ${MINIO_SECRET_KEY}
+      Bucket: qrmenu-menu-images
+      UseSSL: false
+
+    KafkaBrokers:
+    - kafka.qrmenu.svc.cluster.local:9092
+    Outbox:
+      PollIntervalMs: 500
+      BatchSize: 100
+      MaxAttempts: 5
+
+    DevServer:
+      Enabled: true
+      Port: 6060
+      HealthPath: /healthz
+      MetricsPath: /metrics
+      EnableMetrics: true
+      EnablePprof: true
+    ReadinessPort: 6061
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-config
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: order}
+data:
+  order.v1.yaml: |
+    Name: order.rpc
+    Mode: pro
+    ListenOn: 0.0.0.0:8083
+    Etcd:
+      Hosts:
+      - etcd.qrmenu.svc.cluster.local:2379
+      Key: order.rpc
+    Timeout: 3000
+
+    Postgres:
+      DataSource: ${ORDER_POSTGRES_DSN}
+
+    CatalogRpc:
+      Etcd:
+        Hosts:
+        - etcd.qrmenu.svc.cluster.local:2379
+        Key: catalog.rpc
+      NonBlock: true
+      Timeout: 800   # rpc->rpc budget, docs/TZ.md §7.4
+
+    KafkaBrokers:
+    - kafka.qrmenu.svc.cluster.local:9092
+    Outbox:
+      PollIntervalMs: 500
+      BatchSize: 100
+      MaxAttempts: 5
+
+    # Must match identity's GuestTokenTTLSeconds above: order writes this
+    # as the bookkeeping copy of the JWT's own expiry.
+    GuestSessionTTLSeconds: 14400
+    ServiceRequestTTLSeconds: 900
+    VenueSettingsCacheSeconds: 60
+
+    DevServer:
+      Enabled: true
+      Port: 6060
+      HealthPath: /healthz
+      MetricsPath: /metrics
+      EnableMetrics: true
+      EnablePprof: true
+    ReadinessPort: 6061
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: gateway}
+data:
+  gateway-api.yaml: |
+    Name: gateway-api
+    Host: 0.0.0.0
+    Port: 8888
+    Timeout: 10000   # browser->gateway budget, docs/TZ.md §7.4
+
+    CatalogRpc:
+      Etcd: {Hosts: [etcd.qrmenu.svc.cluster.local:2379], Key: catalog.rpc}
+      NonBlock: true
+      Timeout: 3000
+    OrderRpc:
+      Etcd: {Hosts: [etcd.qrmenu.svc.cluster.local:2379], Key: order.rpc}
+      NonBlock: true
+      Timeout: 3000
+    IdentityRpc:
+      Etcd: {Hosts: [etcd.qrmenu.svc.cluster.local:2379], Key: identity.rpc}
+      NonBlock: true
+      Timeout: 3000
+
+    Redis:
+      Host: redis.qrmenu.svc.cluster.local:6379
+      Type: node
+      Pass: ${REDIS_PASSWORD}
+
+    JWKSRefreshSeconds: 300
+
+    KafkaBrokers:
+    - kafka.qrmenu.svc.cluster.local:9092
+    # Left unset on purpose: the consumer defaults InstanceID to HOSTNAME,
+    # which Kubernetes sets to the pod name. That is exactly the per-pod
+    # consumer group docs/TZ.md §7.3 requires — pinning it here would give
+    # every replica the same group and split events between them, so most
+    # clients would silently stop receiving pushes.
+    KafkaGroupPrefix: gateway
+
+    # Browsers do not apply the same-origin policy to WebSocket upgrades,
+    # so this list is a real control. Replace with the real frontend
+    # origins before exposing the ingress.
+    WSAllowedOrigins:
+    - https://menu.example.com
+    - https://admin.example.com
+
+    DevServer:
+      Enabled: true
+      Port: 6060
+      HealthPath: /healthz
+      MetricsPath: /metrics
+      EnableMetrics: true
+      EnablePprof: true
+    ReadinessPort: 6061

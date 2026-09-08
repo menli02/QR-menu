@@ -46,6 +46,11 @@ type Config struct {
 	// VenueSettingsCacheSeconds bounds how stale the cached copy of a
 	// venue's order limits may be (see internal/venue). Defaults to 60s.
 	VenueSettingsCacheSeconds int `json:",optional"`
+
+	// ReadinessPort serves GET /readyz, the dependency-aware check behind
+	// the Kubernetes startup probe (see pkg/health). Defaults to 6061 when
+	// unset — 6060 is go-zero's own admin server.
+	ReadinessPort int `json:",default=6061"`
 }
 
 // Effective values, with the documented defaults applied. Kept as methods

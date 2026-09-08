@@ -123,6 +123,51 @@ jobs:
         with:
           version: v2.6.2
 
+  manifests:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Renders the kustomization and validates every resource against the
+      # real API schemas. Catches the class of mistake that otherwise only
+      # surfaces at `kubectl apply` against a live cluster: a misspelled
+      # field, a resource nested wrongly, an API version that does not
+      # exist.
+      - name: Install kubeconform
+        run: |
+          curl -fsSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+
+      - name: Validate rendered manifests
+        # 1.29 is the floor the manifests declare (the gateway's
+        # preStop.sleep hook needs it). Validating at the floor rather than
+        # at some newer version is the point: it fails if someone adds a
+        # field the documented minimum cluster cannot accept.
+        run: |
+          kubectl kustomize deploy/k8s \
+            | kubeconform -strict -summary -kubernetes-version 1.29.0 -
+
+      - name: Validate the standalone manifests
+        # Not in the kustomization — a Job is immutable once created, and
+        # the secrets file is placeholders — but they still have to parse.
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.29.0 \
+            deploy/k8s/migrate-job.yaml deploy/k8s/secrets.example.yaml
+
+      - name: No real credentials in the committed manifests
+        # secrets.example.yaml is meant to stay placeholders. This is a
+        # cheap guard against the commit that fills it in "just to test
+        # something" — a password in git stays in git.
+        run: |
+          if grep -rIEn '(password|secret|dsn|key)["'"'"']?\s*[:=]\s*["'"'"']?[A-Za-z0-9+/]{16,}' \
+               deploy/k8s/ --include='*.yaml' | grep -v '<' ; then
+            echo "::error::deploy/k8s appears to contain a literal credential"
+            exit 1
+          fi
+          echo "no literal credentials found"
+
   proto:
     name: buf lint / breaking
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 name: Docker images
 
-# Every push and PR builds all 4 service images to catch a broken Dockerfile
+# Every push and PR builds all 5 images (4 services + the migration
+# runner) to catch a broken Dockerfile
 # before it ships. Only push to origin/main (or a vNN.NN.NN tag) actually
 # publishes to GHCR — a PR from a fork never gets registry credentials.
 on:
@@ -20,7 +21,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [gateway, catalog, order, identity]
+        # Objects rather than a bare list because the migration runner's
+        # Dockerfile does not live under services/. It is built and tagged
+        # alongside the services on purpose: the schema is part of a
+        # release, so it should be promoted and rolled back with one tag
+        # (see deploy/k8s/migrate-job.yaml).
+        include:
+          - {service: gateway,  dockerfile: services/gateway/Dockerfile}
+          - {service: catalog,  dockerfile: services/catalog/Dockerfile}
+          - {service: order,    dockerfile: services/order/Dockerfile}
+          - {service: identity, dockerfile: services/identity/Dockerfile}
+          - {service: migrate,  dockerfile: migrations/Dockerfile}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +61,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/${{ matrix.service }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           # Bare-metal target is assumed amd64; add linux/arm64 here if a
           # node pool or local (Apple Silicon) workflow needs it.
           platforms: linux/amd64

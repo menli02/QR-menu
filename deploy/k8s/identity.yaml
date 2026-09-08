@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: identity}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: identity}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below the declared replica count during a rollout. The
+      # other services cannot mint or verify a token without identity, so
+      # a moment with zero ready pods is a moment nobody can log in or
+      # place an order.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: identity}
+      annotations:
+        # Roll the pods when the config changes. Without this a ConfigMap
+        # edit updates the mounted file but nothing restarts, so half the
+        # fleet runs the old settings until something unrelated triggers a
+        # rollout. Recompute with:
+        #   kubectl -n qrmenu get cm identity-config -o yaml | sha256sum
+        checksum/config: "REPLACE_ON_APPLY"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6060"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: qrmenu
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # 65532 is distroless nonroot. Stated explicitly so the pod is
+        # rejected at admission if a future base image changes it, rather
+        # than quietly running as someone else.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: identity}
+      containers:
+        - name: identity
+          image: ghcr.io/menli02/qr-menu-identity:latest
+          args: ["-f", "/app/etc/identity.v1.yaml"]
+          ports:
+            - {name: grpc, containerPort: 8081}
+            - {name: admin, containerPort: 6060}
+            - {name: readiness, containerPort: 6061}
+          env:
+            - name: IDENTITY_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef: {name: identity-secrets, key: postgres-dsn}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            # Requests are what the scheduler packs against; the CPU limit
+            # is deliberately absent. CPU is compressible, and a limit on a
+            # latency-sensitive Go service mostly buys throttling during
+            # exactly the traffic spike you wanted headroom for. Memory has
+            # a limit because it is not compressible: better one OOMKilled
+            # pod than a node evicting everything on it.
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          startupProbe:
+            # The dependency-aware check: this pod does not receive traffic
+            # until it has proved it can reach identity_db. Catches the
+            # failures that actually happen on a rollout — wrong secret,
+            # unmigrated schema, unreachable host.
+            httpGet: {path: /readyz, port: readiness}
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20   # up to ~60s for the database to come up
+          livenessProbe:
+            # Deliberately NOT /readyz: liveness must depend on nothing
+            # external. Restarting a pod because Postgres is down does not
+            # fix Postgres, it just adds a crash loop to the outage.
+            httpGet: {path: /healthz, port: admin}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            # Also /healthz, for the reason spelled out in pkg/health: a
+            # shared-database check here would take every replica out at
+            # once and turn a degraded service into a total blackout.
+            httpGet: {path: /healthz, port: admin}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - {name: config, mountPath: /app/etc, readOnly: true}
+            - {name: signing-key, mountPath: /etc/identity/keys, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: identity-config}
+        - name: signing-key
+          secret:
+            secretName: identity-signing-key
+            defaultMode: 0400
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity
+  namespace: qrmenu
+  labels: {app.kubernetes.io/part-of: qrmenu, app.kubernetes.io/name: identity}
+spec:
+  # Headless. Service discovery goes through etcd (docs/TZ.md §7.1) — the
+  # services register themselves and clients load-balance per-request. A
+  # ClusterIP would put kube-proxy in front of that and pin every gRPC
+  # client to one backend for the life of its connection, which is the
+  # classic way to end up with one hot pod and the rest idle.
+  clusterIP: None
+  selector: {app.kubernetes.io/name: identity}
+  ports:
+    - {name: grpc, port: 8081, targetPort: grpc}
+    - {name: admin, port: 6060, targetPort: admin}
