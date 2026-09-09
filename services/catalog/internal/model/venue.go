@@ -27,6 +27,7 @@ type Venue struct {
 	CancelWindowSeconds      int32          `db:"cancel_window_seconds"`
 	KDSAmberThresholdSeconds int32          `db:"kds_amber_threshold_seconds"`
 	KDSRedThresholdSeconds   int32          `db:"kds_red_threshold_seconds"`
+	BusinessDayCutoffMinute  int32          `db:"business_day_cutoff_minute"`
 	MenuVersion              int64          `db:"menu_version"`
 	CreatedAt                time.Time      `db:"created_at"`
 	UpdatedAt                time.Time      `db:"updated_at"`
@@ -52,7 +53,7 @@ func NewVenueModel(conn sqlx.Session) *VenueModel {
 const venueCols = `id, slug, name, logo_url, currency, locales, default_locale, timezone,
 	service_charge_bps, order_item_comment_max_len, order_total_limit_minor,
 	cancel_window_seconds, kds_amber_threshold_seconds, kds_red_threshold_seconds,
-	menu_version, created_at, updated_at`
+	business_day_cutoff_minute, menu_version, created_at, updated_at`
 
 func (m *VenueModel) FindByID(ctx context.Context, id string) (*Venue, error) {
 	var v Venue
@@ -92,12 +93,14 @@ func (m *VenueModel) UpdateSettings(ctx context.Context, v *Venue) (*Venue, erro
 			order_total_limit_minor = $10,
 			cancel_window_seconds = $11,
 			kds_amber_threshold_seconds = $12,
-			kds_red_threshold_seconds = $13
+			kds_red_threshold_seconds = $13,
+			business_day_cutoff_minute = $14
 		WHERE id = $1
 		RETURNING `+venueCols,
 		v.ID, v.Name, v.LogoURL, v.Currency, pgTextArrayLiteral(v.Locales), v.DefaultLocale, v.Timezone,
 		v.ServiceChargeBps, v.OrderItemCommentMaxLen, v.OrderTotalLimitMinor,
-		v.CancelWindowSeconds, v.KDSAmberThresholdSeconds, v.KDSRedThresholdSeconds)
+		v.CancelWindowSeconds, v.KDSAmberThresholdSeconds, v.KDSRedThresholdSeconds,
+		v.BusinessDayCutoffMinute)
 	if err != nil {
 		return nil, err
 	}

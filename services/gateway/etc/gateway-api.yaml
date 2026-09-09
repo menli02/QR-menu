@@ -72,3 +72,9 @@ DevServer:
 
 # GET /readyz — dependency-aware, drives the Kubernetes startup probe.
 ReadinessPort: 6067
+
+# Public address of the guest frontend, encoded into every printed QR code
+# (FR-T3, GET /admin/tables/qr.pdf). Must be the address a phone can reach,
+# not this gateway's — behind an ingress those differ. Empty makes the PDF
+# route refuse rather than print codes that resolve nowhere.
+GuestBaseURL: http://127.0.0.1:5173

@@ -45,11 +45,27 @@ var httpStatus = map[Code]int{
 	CodeInternal:             http.StatusInternalServerError,
 }
 
-// Detail is one entry of the optional "details" array, e.g. one
-// unavailable item on a 409 ITEMS_UNAVAILABLE response.
+// Detail is one entry of the optional "details" array. docs/TZ.md §8.1
+// shows the ITEMS_UNAVAILABLE shape (item_id + name); PRICE_CHANGED needs
+// a different one, because §8.1 specifies that code as failing "plus new
+// totals" and a guest cannot re-confirm a number they were not given.
+//
+// One struct with two shapes rather than two types: `details` is a JSON
+// array in the contract, every field is omitempty, and a client reads
+// whichever fields the code it received implies. Splitting it would mean
+// changing the envelope itself.
+//
+// The totals are pointers so that a genuine zero is distinguishable from
+// absent — omitempty on a plain int64 would silently drop a total of 0,
+// which is a real value for a fully-discounted cart.
 type Detail struct {
 	ItemID string `json:"item_id,omitempty"`
 	Name   string `json:"name,omitempty"`
+
+	// PRICE_CHANGED (FR-O7).
+	ExpectedTotalMinor *int64 `json:"expected_total_minor,omitempty"`
+	ActualTotalMinor   *int64 `json:"actual_total_minor,omitempty"`
+	Currency           string `json:"currency,omitempty"`
 }
 
 // Error is the typed error every handler should return for an

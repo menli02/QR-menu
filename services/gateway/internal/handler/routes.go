@@ -237,9 +237,14 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Handler: guest.GetGuestBillHandler(serverCtx),
 				},
 				{
-					Method:  http.MethodGet,
-					Path:    "/menu",
-					Handler: guest.GetGuestMenuHandler(serverCtx),
+					Method: http.MethodGet,
+					Path:   "/menu",
+					// Hand-written rather than the generated
+					// GetGuestMenuHandler: §8.1 wants ETag and
+					// Cache-Control on this route, and a goctl logic
+					// signature has no ResponseWriter to set them with.
+					// See handler/guest/menu_cache_handler.go.
+					Handler: guest.MenuCacheHandler(serverCtx),
 				},
 				{
 					Method:  http.MethodPost,

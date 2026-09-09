@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func TestStaffModel_insertFindUpdateDeactivate(t *testing.T) {
 		t.Fatalf("unexpected created row: %+v", created)
 	}
 
-	found, err := m.FindByID(ctx, created.ID)
+	found, err := m.FindByID(ctx, venueID, created.ID)
 	if err != nil {
 		t.Fatalf("FindByID: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestStaffModel_insertFindUpdateDeactivate(t *testing.T) {
 	if !deactivated {
 		t.Fatal("expected Deactivate to report a row was affected")
 	}
-	after, err := m.FindByID(ctx, created.ID)
+	after, err := m.FindByID(ctx, venueID, created.ID)
 	if err != nil {
 		t.Fatalf("FindByID after deactivate: %v", err)
 	}
@@ -292,5 +293,41 @@ func TestSigningKeyModel_ensureActiveIdempotentAndDemotes(t *testing.T) {
 	}
 	if gotB == nil || !gotB.IsActive {
 		t.Fatalf("expected kidB to be active, got: %+v", gotB)
+	}
+}
+
+// TestStaffModel_findByIDIsVenueScoped is the regression test for a
+// cross-tenant read that GetStaff had before identity.proto grew a
+// venue_id on its request: an id from another venue must come back as
+// ErrNotFound, not as that person's name, email and role.
+//
+// NotFound rather than a permission error, deliberately — a distinct
+// "forbidden" would confirm the id exists, which is most of what an
+// attacker holding a guessed id wants to learn.
+func TestStaffModel_findByIDIsVenueScoped(t *testing.T) {
+	conn := testConn(t)
+	ctx := context.Background()
+	m := NewStaffModel(conn)
+
+	venueA, venueB := uuid.NewString(), uuid.NewString()
+	created, err := m.Insert(ctx, venueA, "Ada", "ada-"+uuid.NewString()+"@example.test", "hash", "admin")
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	t.Cleanup(func() { _, _ = conn.ExecCtx(context.Background(), "DELETE FROM staff WHERE id = $1", created.ID) })
+
+	if _, err := m.FindByID(ctx, venueA, created.ID); err != nil {
+		t.Fatalf("the owning venue should be able to read its own staff: %v", err)
+	}
+
+	_, err = m.FindByID(ctx, venueB, created.ID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("another venue reading this id got %v, want ErrNotFound", err)
+	}
+
+	// The unscoped variant still works, because Refresh depends on it —
+	// but it is the only caller, and its name makes that visible.
+	if _, err := m.FindByIDUnscoped(ctx, created.ID); err != nil {
+		t.Errorf("FindByIDUnscoped: %v", err)
 	}
 }

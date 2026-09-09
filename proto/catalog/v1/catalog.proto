@@ -60,6 +60,17 @@ service CatalogService {
   // (docs/TZ.md FR-T4).
   rpc RotateVenueQRKey(RotateVenueQRKeyRequest) returns (RotateVenueQRKeyResponse);
 
+  // GetTablePrintCodes returns the signed QR payload for printing
+  // (docs/TZ.md FR-T3, GET /admin/tables/qr.pdf).
+  //
+  // A dedicated RPC rather than a `sig` field on Table, deliberately. That
+  // signature is a credential: venue_slug + table_code + sig is all it
+  // takes to open a guest session at a table. Putting it on Table would
+  // hand it out with every ListTables call, including the ones that only
+  // wanted a label. Here it is a separate, narrow, individually auditable
+  // request that an operator can see in a log.
+  rpc GetTablePrintCodes(GetTablePrintCodesRequest) returns (GetTablePrintCodesResponse);
+
   rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesResponse);
   rpc CreateCategory(CreateCategoryRequest) returns (Category);
   rpc UpdateCategory(UpdateCategoryRequest) returns (Category);
@@ -105,6 +116,13 @@ message VenueSettings {
   int32 kds_amber_threshold_seconds = 12;
   int32 kds_red_threshold_seconds = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // Minutes past venue-local midnight at which the business day rolls over
+  // (docs/TZ.md FR-A2 lists a "business-day cutoff" among venue settings,
+  // but nothing carried it). 0 means midnight, which is what the order
+  // service assumed before this field existed — so an unset value keeps
+  // the previous behaviour exactly. 240 = 04:00, the usual choice for a
+  // venue that serves past midnight.
+  int32 business_day_cutoff_minute = 15;
 }
 
 message Hall {
@@ -346,6 +364,29 @@ message DeleteTableRequest {
 message DeleteTableResponse {
   bool deleted = 1;
 }
+message GetTablePrintCodesRequest {
+  string venue_id = 1;
+  // Empty means every active table in the venue — the usual case, since
+  // this exists to print a whole venue's codes at once.
+  repeated string table_ids = 2;
+  string actor_staff_id = 3;
+}
+message TablePrintCode {
+  string table_id = 1;
+  string hall_id = 2;
+  string label = 3;
+  string table_code = 4;
+  int32 key_version = 5;
+  // HMAC-SHA256 over "<venue_id>:<table_code>", base64url, computed with
+  // the key named by key_version — the same value ResolveTable verifies.
+  string sig = 6;
+}
+message GetTablePrintCodesResponse {
+  // Needed to build the QR link and never derivable from a table alone.
+  string venue_slug = 1;
+  repeated TablePrintCode codes = 2;
+}
+
 message RotateVenueQRKeyRequest {
   string venue_id = 1;
   string actor_staff_id = 2;

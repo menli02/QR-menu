@@ -27,21 +27,22 @@ func NewGetStaffLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetStaff
 	}
 }
 
-// GetStaff fetches one staff record by id.
+// GetStaff fetches one staff record, scoped to a venue.
 //
-// SECURITY (flagged, not fixed here): GetStaffRequest carries no venue_id
-// (see identity.proto), so this cannot verify the caller's own venue
-// matches the returned row's venue_id — unlike Update/SetPassword/
-// Deactivate below, which are all scoped to (id, venue_id). If any caller
-// ever passes this a foreign staff_id, it leaks that staff member's name/
-// email/role across the tenant boundary. IDs are random UUIDv4
-// (unguessable on their own), which limits exploitability, but this
-// should be closed with an additive `venue_id` field on GetStaffRequest —
-// that's a proto/contract change (docs/TZ.md §8 treats these as
-// long-lived interfaces) and deserves its own visible commit rather than
-// being folded in here silently.
+// The venue_id is required, not optional. It was added to the request
+// after the fact (identity.proto field 2) precisely to close a
+// cross-tenant read: before it, this was the one staff RPC not scoped to
+// (id, venue_id), so any caller holding a staff id from another venue got
+// back that person's name, email and role. Rejecting an empty venue_id
+// rather than treating it as "any venue" is what makes the fix real — a
+// caller that has not been updated fails loudly instead of silently
+// keeping the old behaviour.
 func (l *GetStaffLogic) GetStaff(in *v1_identitypb.GetStaffRequest) (*v1_identitypb.Staff, error) {
-	staff, err := l.svcCtx.StaffModel.FindByID(l.ctx, in.GetStaffId())
+	if in.GetStaffId() == "" || in.GetVenueId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "staff_id and venue_id are required")
+	}
+
+	staff, err := l.svcCtx.StaffModel.FindByID(l.ctx, in.GetVenueId(), in.GetStaffId())
 	if err != nil {
 		if errors.Is(err, model.ErrNotFound) {
 			return nil, status.Error(codes.NotFound, "staff not found")

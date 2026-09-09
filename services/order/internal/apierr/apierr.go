@@ -15,6 +15,8 @@
 package apierr
 
 import (
+	"strconv"
+
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,6 +32,7 @@ const (
 	ReasonValidationFailed     = "VALIDATION_FAILED"
 	ReasonNotFound             = "NOT_FOUND"
 	ReasonItemsUnavailable     = "ITEMS_UNAVAILABLE"
+	ReasonPriceChanged         = "PRICE_CHANGED"
 	ReasonInvalidTransition    = "INVALID_TRANSITION"
 	ReasonIdempotencyKeyReused = "IDEMPOTENCY_KEY_REUSED"
 	ReasonRequestInProgress    = "REQUEST_IN_PROGRESS"
@@ -102,6 +105,30 @@ func RequestInProgress(msg string) error {
 // were already placed.
 func CatalogUnavailable(msg string) error {
 	return coded(codes.Unavailable, ReasonCatalogUnavailable, msg)
+}
+
+// PriceChanged is FR-O7: the cart re-priced to something other than what
+// the guest was shown, so the submit fails and they re-confirm rather than
+// being charged a price they never saw.
+//
+// The new total rides along in the ErrorInfo metadata. Without it the
+// guest UI can only say "the price changed" and force a full reload; with
+// it, it can show the new number and a confirm button.
+func PriceChanged(msg string, expectedMinor, actualMinor int64, currency string) error {
+	st := status.New(codes.FailedPrecondition, msg)
+	withInfo, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: ReasonPriceChanged,
+		Domain: Domain,
+		Metadata: map[string]string{
+			"expected_total_minor": strconv.FormatInt(expectedMinor, 10),
+			"actual_total_minor":   strconv.FormatInt(actualMinor, 10),
+			"currency":             currency,
+		},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withInfo.Err()
 }
 
 // ItemsUnavailable is FR-O6. Partial acceptance is not allowed in R1, so

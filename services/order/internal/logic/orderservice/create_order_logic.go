@@ -88,6 +88,27 @@ func (l *CreateOrderLogic) CreateOrder(in *v1_orderpb.CreateOrderRequest) (*v1_o
 			resolved.GetTotalMinor(), settings.OrderTotalLimitMinor))
 	}
 
+	// FR-O7: the guest must never be charged a price they were not shown.
+	// The check sits here, after pricing and before the transaction, so a
+	// rejected submit writes nothing at all — no order, no session, no
+	// idempotency claim — and the guest's retry with the corrected total
+	// is a clean first attempt rather than a replay.
+	//
+	// expected_total_minor is 0 for a client written before the field
+	// existed, which skips the check. That keeps the contract additive at
+	// the cost of those clients not getting FR-O7's protection; the
+	// alternative, treating 0 as "expects a free order", would reject
+	// every one of their submits.
+	if expected := in.GetExpectedTotalMinor(); expected > 0 && expected != resolved.GetTotalMinor() {
+		currency := resolved.GetCurrency()
+		if currency == "" {
+			currency = settings.Currency
+		}
+		return nil, apierr.PriceChanged(
+			"prices changed while you were ordering; please confirm the new total",
+			expected, resolved.GetTotalMinor(), currency)
+	}
+
 	businessDate := settings.BusinessDate(time.Now())
 
 	return runIdempotent(l.ctx, l.svcCtx.DB, endpointCreateOrder,
@@ -333,6 +354,15 @@ func validateComments(in *v1_orderpb.CreateOrderRequest, maxLen int) error {
 // and rejecting the retry as IDEMPOTENCY_KEY_REUSED would be wrong.
 // Item order is preserved: two lines of the same item with different
 // comments are distinguishable, and reordering lines is a different cart.
+//
+// expected_total_minor is deliberately excluded. The fingerprint
+// identifies the intended *effect* — what is being ordered — and the
+// expected total is a precondition on it, not part of it. Including it
+// would make a retry after a PRICE_CHANGED round trip look like a
+// different request and earn IDEMPOTENCY_KEY_REUSED. Excluding it is safe
+// because the items are hashed: two requests that differ only in expected
+// total are the same cart, and replaying that cart's order is the correct
+// answer.
 func createOrderFingerprint(in *v1_orderpb.CreateOrderRequest) string {
 	parts := []string{in.GetVenueId(), in.GetTableId(), in.GetGuestSessionId(), in.GetLocale()}
 	for _, it := range in.GetItems() {

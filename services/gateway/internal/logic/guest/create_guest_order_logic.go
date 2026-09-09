@@ -40,9 +40,14 @@ func NewCreateGuestOrderLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 // and comments. That is what makes it structurally impossible to order
 // onto another table's bill.
 //
-// Prices are absent from the request by design (FR-O3): the server
-// re-prices every line against the live menu, and the client's displayed
-// total is never trusted.
+// Per-line prices are absent from the request by design (FR-O3): the
+// server re-prices every line against the live menu, and the client's
+// displayed total is never trusted.
+//
+// expectedTotalMinor is not an exception to that. It is not used to
+// charge anything — it is compared against the freshly resolved total,
+// and a mismatch fails the submit with PRICE_CHANGED (FR-O7) so the guest
+// re-confirms rather than paying a price they never saw.
 func (l *CreateGuestOrderLogic) CreateGuestOrder(req *types.CreateGuestOrderReq) (resp *types.Order, err error) {
 	claims, err := authz.Guest(l.ctx)
 	if err != nil {
@@ -78,6 +83,10 @@ func (l *CreateGuestOrderLogic) CreateGuestOrder(req *types.CreateGuestOrderReq)
 		GuestSessionId: claims.GuestSessionID,
 		IdempotencyKey: key,
 		Items:          items,
+		// FR-O7. Zero means the client did not say what it was showing,
+		// which the order service reads as "no expectation" and skips the
+		// check — so an older client keeps working without it.
+		ExpectedTotalMinor: req.ExpectedTotalMinor,
 	})
 	if err != nil {
 		return nil, rpcerr.From(err)

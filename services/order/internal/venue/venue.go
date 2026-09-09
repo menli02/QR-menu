@@ -37,6 +37,9 @@ type Settings struct {
 	CommentMaxLen        int
 	OrderTotalLimitMinor int64
 	CancelWindow         time.Duration
+	// CutoffMinute is minutes past venue-local midnight at which the
+	// business day rolls over (FR-A2). 0 is midnight.
+	CutoffMinute int32
 }
 
 // Defaults applied when a venue leaves a setting at zero. They mirror the
@@ -93,6 +96,7 @@ func fromProto(s *v1_catalogpb.VenueSettings) *Settings {
 		CommentMaxLen:        int(s.GetOrderItemCommentMaxLen()),
 		OrderTotalLimitMinor: s.GetOrderTotalLimitMinor(),
 		CancelWindow:         time.Duration(s.GetCancelWindowSeconds()) * time.Second,
+		CutoffMinute:         s.GetBusinessDayCutoffMinute(),
 	}
 	if out.CommentMaxLen <= 0 {
 		out.CommentMaxLen = DefaultCommentMaxLen
@@ -122,16 +126,24 @@ func loadLocation(name string) *time.Location {
 // BusinessDate is the venue-local business day used for order numbering
 // and the day report (FR-O8, FR-A3).
 //
-// Known gap: FR-A2 lists a configurable "business-day cutoff" among venue
-// settings, but neither catalog_db.venues nor VenueSettings carries an
-// hour — the schema comment says the timezone alone drives it. So this is
-// midnight venue-local. A venue serving past midnight will see the night's
-// late orders numbered into the next day. Closing that properly needs an
-// additive field (e.g. business_day_cutoff_minute) on VenueSettings; it is
-// flagged rather than guessed at here.
+// A restaurant's day is not the calendar's. A venue that closes at 02:00
+// wants the whole night on one report and one run of ticket numbers, so
+// FR-A2 makes the rollover configurable: anything before CutoffMinute
+// belongs to the previous business day.
+//
+// CutoffMinute 0 is plain midnight, which is what this did before the
+// setting existed — so a venue that never touches it sees no change.
 func (s *Settings) BusinessDate(t time.Time) time.Time {
 	local := t.In(s.Location)
-	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+
+	// Subtracting the cutoff and then taking the date handles the day
+	// boundary without any special-casing: 01:30 with a 04:00 cutoff
+	// becomes 21:30 the previous day, which is the business day wanted.
+	// Doing it the other way — comparing the clock and conditionally
+	// decrementing the date — has to get month and year ends right by
+	// hand, and DST would still be waiting.
+	shifted := local.Add(-time.Duration(s.CutoffMinute) * time.Minute)
+	return time.Date(shifted.Year(), shifted.Month(), shifted.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // ParseBusinessDate reads a YYYY-MM-DD report parameter into the same

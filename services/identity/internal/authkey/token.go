@@ -8,12 +8,31 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
+// Token type discriminators, carried in the `typ` claim.
+//
+// Without one, a staff token and a guest token are distinguishable only by
+// which optional claims they happen to carry — and a verifier that just
+// reads the fields it names will accept either. Both are signed by the
+// same key, so a guest token (which anyone who scans a QR code in the
+// dining room can obtain) verified as a staff token yields a valid-looking
+// identity with an empty role. Every route that requires only
+// authentication, not a specific role, is then open to any guest.
+//
+// This is a required claim on both sides: identity always mints it and the
+// gateway always checks it. Making it optional would leave the hole open
+// for anything that forgot to look.
+const (
+	TokenTypeStaff = "staff"
+	TokenTypeGuest = "guest"
+)
+
 // StaffClaims are embedded in a staff access token. The subject is the
 // staff id.
 type StaffClaims struct {
 	jwt.RegisteredClaims
-	VenueID string `json:"venue_id"`
-	Role    string `json:"role"`
+	TokenType string `json:"typ"`
+	VenueID   string `json:"venue_id"`
+	Role      string `json:"role"`
 }
 
 // GuestClaims are embedded in an anonymous guest token (docs/TZ.md FR-O1):
@@ -21,6 +40,7 @@ type StaffClaims struct {
 // session id.
 type GuestClaims struct {
 	jwt.RegisteredClaims
+	TokenType      string `json:"typ"`
 	VenueID        string `json:"venue_id"`
 	TableID        string `json:"table_id"`
 	GuestSessionID string `json:"guest_session_id"`
@@ -38,8 +58,9 @@ func MintStaff(priv *rsa.PrivateKey, kid, staffID, venueID, role string, ttl tim
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
-		VenueID: venueID,
-		Role:    role,
+		TokenType: TokenTypeStaff,
+		VenueID:   venueID,
+		Role:      role,
 	}
 	token, err = sign(priv, kid, claims)
 	return token, expiresAt, err
@@ -56,6 +77,7 @@ func MintGuest(priv *rsa.PrivateKey, kid, venueID, tableID, guestSessionID strin
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
+		TokenType:      TokenTypeGuest,
 		VenueID:        venueID,
 		TableID:        tableID,
 		GuestSessionID: guestSessionID,

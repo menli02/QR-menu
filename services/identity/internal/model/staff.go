@@ -50,7 +50,33 @@ func (m *StaffModel) Insert(ctx context.Context, venueID, name, email, passwordH
 	return &s, nil
 }
 
-func (m *StaffModel) FindByID(ctx context.Context, id string) (*Staff, error) {
+// FindByID is scoped to a venue, like every other staff lookup in this
+// model. The scoping is the tenant boundary: an id from another venue
+// simply does not match, so the caller gets ErrNotFound rather than
+// another tenant's row — and rather than a "forbidden" that would confirm
+// the id exists.
+func (m *StaffModel) FindByID(ctx context.Context, venueID, id string) (*Staff, error) {
+	var s Staff
+	err := m.conn.QueryRowCtx(ctx, &s,
+		`SELECT `+staffCols+` FROM staff WHERE id = $1 AND venue_id = $2`, id, venueID)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// FindByIDUnscoped looks a staff member up by id alone.
+//
+// Named unscoped so that using it is a visible decision. There is exactly
+// one caller and one reason: Refresh follows the staff_id recorded on a
+// refresh_tokens row it has already authenticated. That row *is* the proof
+// of which staff member this is, so there is no venue to check against and
+// nothing to cross — the token was issued to this person.
+//
+// Any other caller wants FindByID, which is scoped to a venue. Reaching
+// for this one to avoid threading a venue_id through is how the
+// cross-tenant read that FindByID now prevents gets reintroduced.
+func (m *StaffModel) FindByIDUnscoped(ctx context.Context, id string) (*Staff, error) {
 	var s Staff
 	err := m.conn.QueryRowCtx(ctx, &s, `SELECT `+staffCols+` FROM staff WHERE id = $1`, id)
 	if err != nil {

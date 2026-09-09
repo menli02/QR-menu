@@ -11,6 +11,7 @@ import (
 	"github.com/menli02/QR-menu/services/gateway/internal/consumer"
 	"github.com/menli02/QR-menu/services/gateway/internal/errs"
 	"github.com/menli02/QR-menu/services/gateway/internal/handler"
+	adminhandler "github.com/menli02/QR-menu/services/gateway/internal/handler/admin"
 	"github.com/menli02/QR-menu/services/gateway/internal/reqctx"
 	"github.com/menli02/QR-menu/services/gateway/internal/svc"
 
@@ -114,18 +115,16 @@ func registerUnroutedRoutes(server *rest.Server, ctx *svc.ServiceContext) {
 	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/guest", Handler: ctx.WS.ServeGuest})
 	server.AddRoute(rest.Route{Method: http.MethodGet, Path: "/ws/staff", Handler: ctx.WS.ServeStaff})
 
-	// Still 501: rendering printable QR codes needs a table's HMAC
-	// signature, and nothing in the catalog contract exposes one — no
-	// `sig` field on Table, no RPC that returns it. The gateway cannot
-	// derive it either; the key lives in catalog. Flagged in
-	// CreateTable's handler too. Deliberately outside the errs envelope,
-	// because "this route is not built" is not one of §8.1's closed set of
-	// domain error codes.
-	server.AddRoute(rest.Route{
-		Method: http.MethodGet,
-		Path:   "/api/v1/admin/tables/qr.pdf",
-		Handler: func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "not implemented: no contract exposes a table's QR signature", http.StatusNotImplemented)
-		},
-	})
+	// Was 501 until catalog grew GetTablePrintCodes: the blocker was never
+	// the rendering, it was that nothing in the contract exposed a table's
+	// HMAC signature and the gateway cannot derive one.
+	// StaffAuth here, and authz.Admin inside the handler: the middleware
+	// establishes who the caller is, the handler decides whether they may
+	// export a venue's QR credentials. Same split as every generated
+	// /admin route.
+	server.AddRoutes(rest.WithMiddleware(ctx.StaffAuth, rest.Route{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/admin/tables/qr.pdf",
+		Handler: adminhandler.QRPDFHandler(ctx),
+	}))
 }

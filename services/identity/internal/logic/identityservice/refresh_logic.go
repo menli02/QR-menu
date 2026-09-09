@@ -54,7 +54,9 @@ func (l *RefreshLogic) Refresh(in *v1_identitypb.RefreshRequest) (*v1_identitypb
 		return nil, status.Error(codes.Unauthenticated, "invalid refresh token")
 	}
 
-	staff, err := l.svcCtx.StaffModel.FindByID(l.ctx, rt.StaffID)
+	// Unscoped by design: the authenticated refresh-token row is what
+	// identifies this staff member, so there is no venue to scope to.
+	staff, err := l.svcCtx.StaffModel.FindByIDUnscoped(l.ctx, rt.StaffID)
 	if err != nil {
 		if errors.Is(err, model.ErrNotFound) {
 			return nil, status.Error(codes.Unauthenticated, "invalid refresh token")

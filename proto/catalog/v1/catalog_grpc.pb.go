@@ -38,6 +38,7 @@ const (
 	CatalogService_UpdateTable_FullMethodName         = "/catalog.v1.CatalogService/UpdateTable"
 	CatalogService_DeleteTable_FullMethodName         = "/catalog.v1.CatalogService/DeleteTable"
 	CatalogService_RotateVenueQRKey_FullMethodName    = "/catalog.v1.CatalogService/RotateVenueQRKey"
+	CatalogService_GetTablePrintCodes_FullMethodName  = "/catalog.v1.CatalogService/GetTablePrintCodes"
 	CatalogService_ListCategories_FullMethodName      = "/catalog.v1.CatalogService/ListCategories"
 	CatalogService_CreateCategory_FullMethodName      = "/catalog.v1.CatalogService/CreateCategory"
 	CatalogService_UpdateCategory_FullMethodName      = "/catalog.v1.CatalogService/UpdateCategory"
@@ -92,6 +93,16 @@ type CatalogServiceClient interface {
 	// previous version stays valid for the venue's configured grace period
 	// (docs/TZ.md FR-T4).
 	RotateVenueQRKey(ctx context.Context, in *RotateVenueQRKeyRequest, opts ...grpc.CallOption) (*RotateVenueQRKeyResponse, error)
+	// GetTablePrintCodes returns the signed QR payload for printing
+	// (docs/TZ.md FR-T3, GET /admin/tables/qr.pdf).
+	//
+	// A dedicated RPC rather than a `sig` field on Table, deliberately. That
+	// signature is a credential: venue_slug + table_code + sig is all it
+	// takes to open a guest session at a table. Putting it on Table would
+	// hand it out with every ListTables call, including the ones that only
+	// wanted a label. Here it is a separate, narrow, individually auditable
+	// request that an operator can see in a log.
+	GetTablePrintCodes(ctx context.Context, in *GetTablePrintCodesRequest, opts ...grpc.CallOption) (*GetTablePrintCodesResponse, error)
 	ListCategories(ctx context.Context, in *ListCategoriesRequest, opts ...grpc.CallOption) (*ListCategoriesResponse, error)
 	CreateCategory(ctx context.Context, in *CreateCategoryRequest, opts ...grpc.CallOption) (*Category, error)
 	UpdateCategory(ctx context.Context, in *UpdateCategoryRequest, opts ...grpc.CallOption) (*Category, error)
@@ -273,6 +284,16 @@ func (c *catalogServiceClient) RotateVenueQRKey(ctx context.Context, in *RotateV
 	return out, nil
 }
 
+func (c *catalogServiceClient) GetTablePrintCodes(ctx context.Context, in *GetTablePrintCodesRequest, opts ...grpc.CallOption) (*GetTablePrintCodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTablePrintCodesResponse)
+	err := c.cc.Invoke(ctx, CatalogService_GetTablePrintCodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *catalogServiceClient) ListCategories(ctx context.Context, in *ListCategoriesRequest, opts ...grpc.CallOption) (*ListCategoriesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListCategoriesResponse)
@@ -424,6 +445,16 @@ type CatalogServiceServer interface {
 	// previous version stays valid for the venue's configured grace period
 	// (docs/TZ.md FR-T4).
 	RotateVenueQRKey(context.Context, *RotateVenueQRKeyRequest) (*RotateVenueQRKeyResponse, error)
+	// GetTablePrintCodes returns the signed QR payload for printing
+	// (docs/TZ.md FR-T3, GET /admin/tables/qr.pdf).
+	//
+	// A dedicated RPC rather than a `sig` field on Table, deliberately. That
+	// signature is a credential: venue_slug + table_code + sig is all it
+	// takes to open a guest session at a table. Putting it on Table would
+	// hand it out with every ListTables call, including the ones that only
+	// wanted a label. Here it is a separate, narrow, individually auditable
+	// request that an operator can see in a log.
+	GetTablePrintCodes(context.Context, *GetTablePrintCodesRequest) (*GetTablePrintCodesResponse, error)
 	ListCategories(context.Context, *ListCategoriesRequest) (*ListCategoriesResponse, error)
 	CreateCategory(context.Context, *CreateCategoryRequest) (*Category, error)
 	UpdateCategory(context.Context, *UpdateCategoryRequest) (*Category, error)
@@ -492,6 +523,9 @@ func (UnimplementedCatalogServiceServer) DeleteTable(context.Context, *DeleteTab
 }
 func (UnimplementedCatalogServiceServer) RotateVenueQRKey(context.Context, *RotateVenueQRKeyRequest) (*RotateVenueQRKeyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RotateVenueQRKey not implemented")
+}
+func (UnimplementedCatalogServiceServer) GetTablePrintCodes(context.Context, *GetTablePrintCodesRequest) (*GetTablePrintCodesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTablePrintCodes not implemented")
 }
 func (UnimplementedCatalogServiceServer) ListCategories(context.Context, *ListCategoriesRequest) (*ListCategoriesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListCategories not implemented")
@@ -835,6 +869,24 @@ func _CatalogService_RotateVenueQRKey_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CatalogService_GetTablePrintCodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTablePrintCodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).GetTablePrintCodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_GetTablePrintCodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).GetTablePrintCodes(ctx, req.(*GetTablePrintCodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CatalogService_ListCategories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListCategoriesRequest)
 	if err := dec(in); err != nil {
@@ -1103,6 +1155,10 @@ var CatalogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RotateVenueQRKey",
 			Handler:    _CatalogService_RotateVenueQRKey_Handler,
+		},
+		{
+			MethodName: "GetTablePrintCodes",
+			Handler:    _CatalogService_GetTablePrintCodes_Handler,
 		},
 		{
 			MethodName: "ListCategories",

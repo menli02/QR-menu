@@ -30,7 +30,7 @@ func (m *StaffAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		var claims staffJWTClaims
-		if err := verifyToken(r.Context(), m.cache, token, &claims); err != nil {
+		if err := verifyToken(r.Context(), m.cache, token, &claims, tokenTypeStaff); err != nil {
 			writeUnauthenticated(w, r)
 			return
 		}
@@ -55,7 +55,7 @@ func (m *StaffAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 // where those protections go missing.
 func (m *StaffAuthMiddleware) Verify(ctx context.Context, token string) (StaffClaims, error) {
 	var claims staffJWTClaims
-	if err := verifyToken(ctx, m.cache, token, &claims); err != nil {
+	if err := verifyToken(ctx, m.cache, token, &claims, tokenTypeStaff); err != nil {
 		return StaffClaims{}, err
 	}
 	return StaffClaims{

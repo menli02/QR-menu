@@ -225,8 +225,15 @@ type OrderItemReq {
 	Comment           string   `json:"comment,optional"`
 }
 
+// ExpectedTotalMinor is the total the guest was shown when they pressed
+// submit. FR-O7: if the server re-prices the cart to anything else the
+// submit fails with PRICE_CHANGED and the new total, and the guest
+// re-confirms rather than being charged a price they never saw. Optional,
+// so a client that predates the field still works — it just forgoes the
+// protection.
 type CreateGuestOrderReq {
-	Items []OrderItemReq `json:"items"`
+	Items              []OrderItemReq `json:"items"`
+	ExpectedTotalMinor int64          `json:"expectedTotalMinor,optional"`
 }
 
 type ListGuestOrdersResp {
@@ -321,8 +328,28 @@ type TransitionServiceRequestReq {
 	To string `json:"to"`
 }
 
+// FloorTable is a table plus whatever is happening at it — §8.1 asks this
+// route for a "table map with session state and totals", and the plain
+// Table type carries none of that. Tables live in catalog and sessions in
+// order, with no cross-service join, so the gateway correlates them.
+//
+// The session fields are empty when nobody is seated, which is the normal
+// state for most of a venue most of the time.
+type FloorTable {
+	Id             string `json:"id"`
+	HallId         string `json:"hallId"`
+	Label          string `json:"label"`
+	Seats          int32  `json:"seats"`
+	IsActive       bool   `json:"isActive"`
+	Occupied       bool   `json:"occupied"`
+	TableSessionId string `json:"tableSessionId,omitempty"`
+	OpenedAt       string `json:"openedAt,omitempty"`
+	TotalMinor     int64  `json:"totalMinor"`
+	Currency       string `json:"currency,omitempty"`
+}
+
 type ListFloorTablesResp {
-	Tables []Table `json:"tables"`
+	Tables []FloorTable `json:"tables"`
 }
 
 type GetTableSessionBillReq {

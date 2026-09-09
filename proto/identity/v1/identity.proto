@@ -104,6 +104,12 @@ message RevokeResponse {
 
 message GetStaffRequest {
   string staff_id = 1;
+  // Required. Every other staff RPC is scoped to (id, venue_id); this one
+  // was not, so a caller who learned a staff id from another venue could
+  // read that row. Added as field 2 rather than made part of staff_id so
+  // the change is additive — an old client omitting it now gets
+  // InvalidArgument rather than silently reading across venues.
+  string venue_id = 2;
 }
 
 // ---- Guest auth ----

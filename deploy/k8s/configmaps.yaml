@@ -183,6 +183,10 @@ data:
 
     JWKSRefreshSeconds: 300
 
+    # Encoded into every printed QR code (FR-T3). Must be the public guest
+    # frontend, reachable from a phone — not a cluster-internal name.
+    GuestBaseURL: https://menu.example.com
+
     KafkaBrokers:
     - kafka.qrmenu.svc.cluster.local:9092
     # Left unset on purpose: the consumer defaults InstanceID to HOSTNAME,

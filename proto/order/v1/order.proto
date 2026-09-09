@@ -208,6 +208,15 @@ message CreateOrderRequest {
   string idempotency_key = 4;
   string locale = 5;
   repeated OrderItemRequest items = 6;
+  // The total the guest was shown when they pressed submit, in minor
+  // units. FR-O7: if the server re-prices the cart to something else the
+  // submit fails with PRICE_CHANGED and the new total, and the guest
+  // re-confirms — rather than being charged a price they never saw.
+  //
+  // 0 means "no expectation" and skips the check, which keeps this
+  // additive: a client written before this field still works, it just
+  // does not get FR-O7's protection.
+  int64 expected_total_minor = 7;
 }
 
 // ---- ListOrders / GetBill ----

@@ -187,3 +187,86 @@ func TestEveryReasonMapsToAKnownCode(t *testing.T) {
 		}
 	}
 }
+
+// TestPriceChangedCarriesTheNewTotals is §8.1's requirement that
+// PRICE_CHANGED fails "plus new totals". Without them a guest UI can only
+// say "the price changed" and force a full reload, which is precisely the
+// re-confirmation flow FR-O7 exists to avoid.
+func TestPriceChangedCarriesTheNewTotals(t *testing.T) {
+	st := status.New(codes.FailedPrecondition, "prices changed")
+	withInfo, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: "PRICE_CHANGED",
+		Domain: "order.qrmenu",
+		Metadata: map[string]string{
+			"expected_total_minor": "800",
+			"actual_total_minor":   "900",
+			"currency":             "USD",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build status: %v", err)
+	}
+
+	got := From(withInfo.Err())
+	if got.Code != errs.CodePriceChanged {
+		t.Fatalf("code = %q, want PRICE_CHANGED", got.Code)
+	}
+	if len(got.Details) != 1 {
+		t.Fatalf("details = %d, want 1", len(got.Details))
+	}
+	d := got.Details[0]
+	if d.ExpectedTotalMinor == nil || *d.ExpectedTotalMinor != 800 {
+		t.Errorf("expected total = %v, want 800", d.ExpectedTotalMinor)
+	}
+	if d.ActualTotalMinor == nil || *d.ActualTotalMinor != 900 {
+		t.Errorf("actual total = %v, want 900", d.ActualTotalMinor)
+	}
+	if d.Currency != "USD" {
+		t.Errorf("currency = %q, want USD", d.Currency)
+	}
+}
+
+// TestPriceChangedWithoutUsableMetadata: a missing or malformed number
+// must produce no detail rather than a confident zero. "The price changed,
+// new total 0" is worse than saying nothing.
+func TestPriceChangedWithoutUsableMetadata(t *testing.T) {
+	for _, meta := range []map[string]string{
+		nil,
+		{},
+		{"currency": "USD"},
+		{"expected_total_minor": "not-a-number", "actual_total_minor": "also-not"},
+	} {
+		st := status.New(codes.FailedPrecondition, "prices changed")
+		withInfo, err := st.WithDetails(&errdetails.ErrorInfo{
+			Reason: "PRICE_CHANGED", Domain: "order.qrmenu", Metadata: meta,
+		})
+		if err != nil {
+			t.Fatalf("build status: %v", err)
+		}
+		got := From(withInfo.Err())
+		if got.Code != errs.CodePriceChanged {
+			t.Errorf("code = %q, want PRICE_CHANGED even without usable metadata", got.Code)
+		}
+		if len(got.Details) != 0 {
+			t.Errorf("metadata %v produced details %+v, want none", meta, got.Details)
+		}
+	}
+}
+
+// TestPriceChangedZeroTotalIsCarried is why the totals are pointers: a
+// fully-discounted cart really can total zero, and omitempty on a plain
+// int64 would silently drop it.
+func TestPriceChangedZeroTotalIsCarried(t *testing.T) {
+	st := status.New(codes.FailedPrecondition, "prices changed")
+	withInfo, _ := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: "PRICE_CHANGED", Domain: "order.qrmenu",
+		Metadata: map[string]string{"expected_total_minor": "500", "actual_total_minor": "0", "currency": "USD"},
+	})
+	got := From(withInfo.Err())
+	if len(got.Details) != 1 || got.Details[0].ActualTotalMinor == nil {
+		t.Fatalf("a zero total was dropped: %+v", got.Details)
+	}
+	if *got.Details[0].ActualTotalMinor != 0 {
+		t.Errorf("actual total = %d, want 0", *got.Details[0].ActualTotalMinor)
+	}
+}

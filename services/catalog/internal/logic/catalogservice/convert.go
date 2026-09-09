@@ -30,6 +30,7 @@ func venueSettingsToProto(v *model.Venue) *v1_catalogpb.VenueSettings {
 		CancelWindowSeconds:      v.CancelWindowSeconds,
 		KdsAmberThresholdSeconds: v.KDSAmberThresholdSeconds,
 		KdsRedThresholdSeconds:   v.KDSRedThresholdSeconds,
+		BusinessDayCutoffMinute:  v.BusinessDayCutoffMinute,
 		UpdatedAt:                timestamppb.New(v.UpdatedAt),
 	}
 	if v.LogoURL.Valid {

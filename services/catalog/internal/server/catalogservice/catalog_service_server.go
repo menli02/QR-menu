@@ -109,6 +109,12 @@ func (s *CatalogServiceServer) RotateVenueQRKey(ctx context.Context, in *v1_cata
 	return l.RotateVenueQRKey(in)
 }
 
+// GetTablePrintCodes returns the signed QR payload for printing (FR-T3).
+func (s *CatalogServiceServer) GetTablePrintCodes(ctx context.Context, in *v1_catalogpb.GetTablePrintCodesRequest) (*v1_catalogpb.GetTablePrintCodesResponse, error) {
+	l := catalogservicelogic.NewGetTablePrintCodesLogic(ctx, s.svcCtx)
+	return l.GetTablePrintCodes(in)
+}
+
 func (s *CatalogServiceServer) ListCategories(ctx context.Context, in *v1_catalogpb.ListCategoriesRequest) (*v1_catalogpb.ListCategoriesResponse, error) {
 	l := catalogservicelogic.NewListCategoriesLogic(ctx, s.svcCtx)
 	return l.ListCategories(in)

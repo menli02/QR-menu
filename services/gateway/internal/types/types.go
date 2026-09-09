@@ -47,7 +47,8 @@ type CreateCategoryReq struct {
 }
 
 type CreateGuestOrderReq struct {
-	Items []OrderItemReq `json:"items"`
+	Items              []OrderItemReq `json:"items"`
+	ExpectedTotalMinor int64          `json:"expectedTotalMinor,optional"`
 }
 
 type CreateGuestServiceRequestReq struct {
@@ -179,8 +180,21 @@ type ListCategoriesResp struct {
 	Categories []Category `json:"categories"`
 }
 
+type FloorTable struct {
+	Id             string `json:"id"`
+	HallId         string `json:"hallId"`
+	Label          string `json:"label"`
+	Seats          int32  `json:"seats"`
+	IsActive       bool   `json:"isActive"`
+	Occupied       bool   `json:"occupied"`
+	TableSessionId string `json:"tableSessionId,omitempty"`
+	OpenedAt       string `json:"openedAt,omitempty"`
+	TotalMinor     int64  `json:"totalMinor"`
+	Currency       string `json:"currency,omitempty"`
+}
+
 type ListFloorTablesResp struct {
-	Tables []Table `json:"tables"`
+	Tables []FloorTable `json:"tables"`
 }
 
 type ListGuestOrdersResp struct {

@@ -52,6 +52,9 @@ type (
 	ResolveVenueBySlugResponse  = v1_catalogpb.ResolveVenueBySlugResponse
 	RotateVenueQRKeyRequest     = v1_catalogpb.RotateVenueQRKeyRequest
 	RotateVenueQRKeyResponse    = v1_catalogpb.RotateVenueQRKeyResponse
+	GetTablePrintCodesRequest   = v1_catalogpb.GetTablePrintCodesRequest
+	GetTablePrintCodesResponse  = v1_catalogpb.GetTablePrintCodesResponse
+	TablePrintCode              = v1_catalogpb.TablePrintCode
 	SetItemAvailabilityRequest  = v1_catalogpb.SetItemAvailabilityRequest
 	SetItemAvailabilityResponse = v1_catalogpb.SetItemAvailabilityResponse
 	Table                       = v1_catalogpb.Table
@@ -86,6 +89,8 @@ type (
 		DeleteTable(ctx context.Context, in *DeleteTableRequest, opts ...grpc.CallOption) (*DeleteTableResponse, error)
 		// RotateVenueQRKey issues a new HMAC key_version for QR signing; the
 		RotateVenueQRKey(ctx context.Context, in *RotateVenueQRKeyRequest, opts ...grpc.CallOption) (*RotateVenueQRKeyResponse, error)
+		// GetTablePrintCodes returns the signed QR payload for printing (FR-T3).
+		GetTablePrintCodes(ctx context.Context, in *GetTablePrintCodesRequest, opts ...grpc.CallOption) (*GetTablePrintCodesResponse, error)
 		ListCategories(ctx context.Context, in *ListCategoriesRequest, opts ...grpc.CallOption) (*ListCategoriesResponse, error)
 		CreateCategory(ctx context.Context, in *CreateCategoryRequest, opts ...grpc.CallOption) (*Category, error)
 		UpdateCategory(ctx context.Context, in *UpdateCategoryRequest, opts ...grpc.CallOption) (*Category, error)
@@ -194,6 +199,12 @@ func (m *defaultCatalogService) DeleteTable(ctx context.Context, in *DeleteTable
 func (m *defaultCatalogService) RotateVenueQRKey(ctx context.Context, in *RotateVenueQRKeyRequest, opts ...grpc.CallOption) (*RotateVenueQRKeyResponse, error) {
 	client := v1_catalogpb.NewCatalogServiceClient(m.cli.Conn())
 	return client.RotateVenueQRKey(ctx, in, opts...)
+}
+
+// GetTablePrintCodes returns the signed QR payload for printing (FR-T3).
+func (m *defaultCatalogService) GetTablePrintCodes(ctx context.Context, in *GetTablePrintCodesRequest, opts ...grpc.CallOption) (*GetTablePrintCodesResponse, error) {
+	client := v1_catalogpb.NewCatalogServiceClient(m.cli.Conn())
+	return client.GetTablePrintCodes(ctx, in, opts...)
 }
 
 func (m *defaultCatalogService) ListCategories(ctx context.Context, in *ListCategoriesRequest, opts ...grpc.CallOption) (*ListCategoriesResponse, error) {

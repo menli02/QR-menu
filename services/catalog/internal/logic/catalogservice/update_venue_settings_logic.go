@@ -63,6 +63,7 @@ func (l *UpdateVenueSettingsLogic) UpdateVenueSettings(in *v1_catalogpb.UpdateVe
 	current.CancelWindowSeconds = s.GetCancelWindowSeconds()
 	current.KDSAmberThresholdSeconds = s.GetKdsAmberThresholdSeconds()
 	current.KDSRedThresholdSeconds = s.GetKdsRedThresholdSeconds()
+	current.BusinessDayCutoffMinute = s.GetBusinessDayCutoffMinute()
 
 	updated, err := venueModel.UpdateSettings(l.ctx, current)
 	if err != nil {

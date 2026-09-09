@@ -43,6 +43,14 @@ type Config struct {
 	// same-origin handshakes only.
 	WSAllowedOrigins []string `json:",optional"`
 
+	// GuestBaseURL is the public address of the guest frontend, used to
+	// build the link inside each printed QR code (FR-T3). It must be the
+	// address a phone can reach, not this gateway's own — which behind an
+	// ingress is a cluster-internal name. Empty makes GET
+	// /admin/tables/qr.pdf refuse rather than print codes that resolve
+	// nowhere.
+	GuestBaseURL string `json:",optional"`
+
 	// ReadinessPort serves GET /readyz, the dependency-aware check behind
 	// the Kubernetes startup probe (see pkg/health). Defaults to 6061 when
 	// unset — 6060 is go-zero's own admin server.

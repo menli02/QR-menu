@@ -16,6 +16,8 @@
 package rpcerr
 
 import (
+	"strconv"
+
 	"github.com/menli02/QR-menu/services/gateway/internal/errs"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -98,6 +100,16 @@ func fromDetails(st *status.Status) (errs.Code, []errs.Detail) {
 			if mapped, ok := reasonToCode[info.GetReason()]; ok {
 				code = mapped
 			}
+			// PRICE_CHANGED carries its numbers in the ErrorInfo metadata
+			// rather than a PreconditionFailure: they describe the request
+			// as a whole, not a per-item violation. §8.1 requires them —
+			// the code alone leaves a guest UI able to say only "the price
+			// changed" and force a full reload.
+			if info.GetReason() == "PRICE_CHANGED" {
+				if d := priceChangedDetail(info.GetMetadata()); d != nil {
+					details = append(details, *d)
+				}
+			}
 		case *errdetails.PreconditionFailure:
 			for _, v := range info.GetViolations() {
 				details = append(details, errs.Detail{
@@ -108,6 +120,37 @@ func fromDetails(st *status.Status) (errs.Code, []errs.Detail) {
 		}
 	}
 	return code, details
+}
+
+// priceChangedDetail turns the ErrorInfo metadata into a details entry.
+// Missing or unparseable numbers yield no detail at all rather than a
+// misleading zero: "the price changed, new total 0" is worse than "the
+// price changed".
+func priceChangedDetail(meta map[string]string) *errs.Detail {
+	expected, okE := parseMinor(meta["expected_total_minor"])
+	actual, okA := parseMinor(meta["actual_total_minor"])
+	if !okE && !okA {
+		return nil
+	}
+	d := &errs.Detail{Currency: meta["currency"]}
+	if okE {
+		d.ExpectedTotalMinor = &expected
+	}
+	if okA {
+		d.ActualTotalMinor = &actual
+	}
+	return d
+}
+
+func parseMinor(s string) (int64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // fromStatusCode is the fallback for a service that returns a bare

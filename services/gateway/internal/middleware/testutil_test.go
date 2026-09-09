@@ -90,8 +90,9 @@ func testStaffClaims(venueID, staffID, role string, ttl time.Duration) *staffJWT
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
-		VenueID: venueID,
-		Role:    role,
+		TokenType: tokenTypeStaff,
+		VenueID:   venueID,
+		Role:      role,
 	}
 }
 
@@ -104,8 +105,20 @@ func testGuestClaims(venueID, tableID, guestSessionID string, ttl time.Duration)
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
+		TokenType:      tokenTypeGuest,
 		VenueID:        venueID,
 		TableID:        tableID,
 		GuestSessionID: guestSessionID,
 	}
+}
+
+// jwksResponseFake is a one-key identity stand-in, for tests that only
+// need a cache that resolves "kid-a".
+type jwksResponseFake struct {
+	fakeIdentityService
+	key *rsa.PrivateKey
+}
+
+func (f *jwksResponseFake) ListJWKS(ctx context.Context, in *v1_identitypb.ListJWKSRequest, opts ...grpc.CallOption) (*v1_identitypb.JWKS, error) {
+	return jwksResponse(jwkFor("kid-a", &f.key.PublicKey)), nil
 }

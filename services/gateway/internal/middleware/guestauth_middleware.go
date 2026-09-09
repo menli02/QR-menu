@@ -28,7 +28,7 @@ func (m *GuestAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		var claims guestJWTClaims
-		if err := verifyToken(r.Context(), m.cache, token, &claims); err != nil {
+		if err := verifyToken(r.Context(), m.cache, token, &claims, tokenTypeGuest); err != nil {
 			writeUnauthenticated(w, r)
 			return
 		}
@@ -47,7 +47,7 @@ func (m *GuestAuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 // than verifying tokens of its own.
 func (m *GuestAuthMiddleware) Verify(ctx context.Context, token string) (GuestClaims, error) {
 	var claims guestJWTClaims
-	if err := verifyToken(ctx, m.cache, token, &claims); err != nil {
+	if err := verifyToken(ctx, m.cache, token, &claims, tokenTypeGuest); err != nil {
 		return GuestClaims{}, err
 	}
 	return GuestClaims{

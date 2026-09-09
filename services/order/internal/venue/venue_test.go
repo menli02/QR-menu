@@ -139,3 +139,105 @@ func TestLoadLocationFallsBackToUTC(t *testing.T) {
 		t.Errorf("loadLocation(empty) = %v, want UTC", got)
 	}
 }
+
+// TestBusinessDateHonoursTheCutoff is FR-A2: a venue that serves past
+// midnight wants the whole night on one business day, not split across two
+// reports with the ticket numbers restarting mid-shift.
+func TestBusinessDateHonoursTheCutoff(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+
+	// 04:00 rollover — the usual choice for a late-night venue.
+	s := &Settings{Location: tokyo, CutoffMinute: 240}
+
+	cases := []struct {
+		name  string
+		local string // venue-local wall clock
+		want  string
+	}{
+		{"mid-service, before midnight", "2026-03-01T22:30:00", "2026-03-01"},
+		{"just after midnight is still the same business day", "2026-03-02T00:30:00", "2026-03-01"},
+		{"just before the cutoff", "2026-03-02T03:59:00", "2026-03-01"},
+		{"exactly at the cutoff starts the new day", "2026-03-02T04:00:00", "2026-03-02"},
+		{"lunchtime", "2026-03-02T12:00:00", "2026-03-02"},
+		// Month and year ends are where a hand-rolled "decrement the date"
+		// implementation goes wrong.
+		{"across a month boundary", "2026-04-01T01:00:00", "2026-03-31"},
+		{"across a year boundary", "2027-01-01T02:00:00", "2026-12-31"},
+		{"across a leap day", "2028-03-01T01:00:00", "2028-02-29"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			local, err := time.ParseInLocation("2006-01-02T15:04:05", tc.local, tokyo)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := s.BusinessDate(local).Format(time.DateOnly); got != tc.want {
+				t.Errorf("BusinessDate(%s local) = %s, want %s", tc.local, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestZeroCutoffIsUnchangedBehaviour guards the additive promise: a venue
+// that never sets the field must bucket orders exactly as it did before
+// the setting existed.
+func TestZeroCutoffIsUnchangedBehaviour(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	s := &Settings{Location: tokyo, CutoffMinute: 0}
+
+	for _, tc := range []struct{ local, want string }{
+		{"2026-03-01T23:59:00", "2026-03-01"},
+		{"2026-03-02T00:00:00", "2026-03-02"},
+		{"2026-03-02T00:01:00", "2026-03-02"},
+	} {
+		local, _ := time.ParseInLocation("2006-01-02T15:04:05", tc.local, tokyo)
+		if got := s.BusinessDate(local).Format(time.DateOnly); got != tc.want {
+			t.Errorf("BusinessDate(%s) = %s, want %s (plain midnight)", tc.local, got, tc.want)
+		}
+	}
+}
+
+// TestCutoffSurvivesADSTTransition: the shift is applied in venue-local
+// time, so a spring-forward night must still resolve to one business day
+// rather than skipping or duplicating one.
+func TestCutoffSurvivesADSTTransition(t *testing.T) {
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	s := &Settings{Location: london, CutoffMinute: 240}
+
+	// 2026-03-29 is the UK spring-forward: 01:00 GMT jumps to 02:00 BST.
+	for _, tc := range []struct{ local, want string }{
+		{"2026-03-29T00:30:00", "2026-03-28"}, // before the jump, before the cutoff
+		{"2026-03-29T03:30:00", "2026-03-28"}, // after the jump, still before the cutoff
+		{"2026-03-29T05:00:00", "2026-03-29"}, // past the cutoff
+	} {
+		local, err := time.ParseInLocation("2006-01-02T15:04:05", tc.local, london)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if got := s.BusinessDate(local).Format(time.DateOnly); got != tc.want {
+			t.Errorf("BusinessDate(%s) = %s, want %s", tc.local, got, tc.want)
+		}
+	}
+}
+
+func TestCutoffIsCarriedFromTheProto(t *testing.T) {
+	got := fromProto(&v1_catalogpb.VenueSettings{VenueId: "v1", BusinessDayCutoffMinute: 240})
+	if got.CutoffMinute != 240 {
+		t.Errorf("CutoffMinute = %d, want 240", got.CutoffMinute)
+	}
+	// Unset must stay 0 rather than picking up a default, or a venue that
+	// never configured it would silently start bucketing differently.
+	if got := fromProto(&v1_catalogpb.VenueSettings{VenueId: "v1"}); got.CutoffMinute != 0 {
+		t.Errorf("CutoffMinute = %d, want 0 when unset", got.CutoffMinute)
+	}
+}
