@@ -543,3 +543,494 @@ Delivery rules:
 - **Replay:** all consumers must be safe to replay from the beginning of retention.
 - **Versioning:** additive fields only; a breaking payload change means a new topic suffix
   (`qrmenu.order.v2`) with dual-publishing during migration.
+
+---
+
+## 9. Data model
+
+PostgreSQL 16. **Database per service** on a shared cluster in the pilot
+(`catalog_db`, `order_db`, `identity_db`), each with its own role and its own migration
+directory under `migrations/`. No cross-database queries and no cross-service foreign keys:
+ids owned by another service (`table_id`, `menu_item_id`, `staff_id`) are stored as plain
+UUIDs. Extraction to separate clusters requires no code change.
+
+Conventions: `id uuid` primary keys, `venue_id uuid NOT NULL` on every tenant-scoped table,
+`created_at`/`updated_at timestamptz` with a shared `set_updated_at()` trigger,
+money as `*_minor bigint` plus `currency char(3)`. Table names are plural and avoid SQL
+reserved words, so no query depends on quoting. Every query is filtered by `venue_id`.
+
+The **Status** column below states what exists in `migrations/` today, so the spec can be
+read as the contract *and* as an honest inventory.
+
+### 9.1 `catalog_db`
+
+| Table | Key columns | Notable indexes | Status |
+|---|---|---|---|
+| `venues` | `slug` uniq, `name`, `currency`, `locales[]`, `default_locale`, `timezone`, `business_day_cutoff_minute`, `service_charge_bps`, `order_item_comment_max_len`, `order_total_limit_minor`, `cancel_window_seconds`, `kds_amber/red_threshold_seconds`, `menu_version` | `uniq(slug)` | ✅ |
+| `venue_qr_keys` | `venue_id`, `key_version`, `secret bytea`, `expires_at` | pk `(venue_id, key_version)`, partial `uniq(venue_id) WHERE expires_at IS NULL` | ✅ |
+| `halls` | `venue_id`, `name`, `sort_order`, `is_active` | `(venue_id, sort_order)` | ✅ |
+| `tables` | `venue_id`, `hall_id`, `label`, `seats`, `is_active`, `table_code`, `key_version` | `uniq(venue_id, table_code)`, `(venue_id, hall_id)`, FK `(venue_id, key_version) → venue_qr_keys` | ✅ |
+| `categories` | `venue_id`, `name jsonb` (per locale), `sort_order`, `is_visible`, `image_url` | `(venue_id, sort_order)` | ✅ |
+| `menu_items` | `venue_id`, `category_id`, `name jsonb`, `description jsonb`, `base_price_minor`, `image_url`, `allergens[]`, `is_active`, `is_available`, `sort_order` | `(venue_id, is_active, is_available)`, `(venue_id, category_id, sort_order)` | ✅ |
+| `availability_windows` | `item_id`, `start_minute_of_day`, `end_minute_of_day` | `(item_id)` | ✅ schema, FR-C7 logic pending |
+| `modifier_groups` | `item_id`, `name jsonb`, `min_select`, `max_select`, `required` | `(item_id)` | ✅ |
+| `modifier_options` | `group_id`, `name jsonb`, `price_delta_minor`, `sort_order` | `(group_id, sort_order)` | ✅ |
+| `outbox` | `id` (= `event_id`), `event_type`, `schema_version`, `venue_id`, `topic`, `partition_key`, `payload jsonb`, `trace_id`, `occurred_at`, `sent_at`, `attempts`, `last_error`, `next_attempt_at` | partial `(next_attempt_at, occurred_at) WHERE sent_at IS NULL` | ✅ |
+
+Two decisions differ from the earlier draft of this document and are now binding:
+
+- **A modifier group belongs to exactly one menu item.** §6's ER diagram shows a
+  many-to-many relation, but every RPC in `catalog.proto` addresses a group through its
+  owning `item_id` and no group-reuse endpoint exists. The schema follows the proto, which is
+  the binding contract. Reusable groups (one "Milk" group shared by every coffee) become a
+  join table in Release 2 — see ADR-0007.
+- **`service_charge_bps`, not a percentage.** Basis points avoid a rounding class of bug on
+  bills; `500` = 5.00%.
+
+`menu_version` is a per-venue `bigint` bumped by catalog's write path inside the same
+transaction as any menu change — not a trigger, so a no-op update can deliberately skip the
+bump. `order_db` stores it as `TEXT` so order history never depends on catalog's internal
+representation.
+
+### 9.2 `order_db`
+
+| Table | Key columns | Notable indexes | Status |
+|---|---|---|---|
+| `table_sessions` | `venue_id`, `table_id`, `status`, `opened_at`, `closed_at`, `closed_by_staff_id`, `payment_method`, `currency`, `total_minor` | partial `uniq(table_id) WHERE status='open'`, `(venue_id, status)` | ✅ |
+| `guest_sessions` | `id` (= JWT `sid`), `venue_id`, `table_id`, `table_session_id`, `issued_at`, `expires_at`, `last_seen_at`, `revoked_at` | `(table_session_id)` | ✅ |
+| `order_number_counters` | `venue_id`, `business_date`, `next_seq` | pk `(venue_id, business_date)` | ✅ |
+| `orders` | `venue_id`, `table_id`, `table_session_id`, `guest_session_id`, `business_date`, `number`, `status`, `total_minor`, `currency`, `menu_version`, `cancelled_reason`, `placed_at`, `accepted_at`, `ready_at`, `served_at` | `uniq(venue_id, business_date, number)`, `(venue_id, status, placed_at)`, `(table_session_id)`, `(venue_id, business_date)` | ✅ |
+| `order_items` | `order_id`, `menu_item_id`, `name`, `unit_price_minor`, `qty`, `comment`, `status`, `line_total_minor` | `(order_id)` | ✅ |
+| `order_item_modifiers` | `order_item_id`, `option_id`, `name`, `price_delta_minor` | `(order_item_id)` | ✅ |
+| `service_requests` | `venue_id`, `table_id`, `table_session_id`, `type`, `status`, `note`, `created_at`, `acknowledged_at`, `resolved_at`, `expires_at` | partial `uniq(table_id, type) WHERE status='open'`, `(venue_id, status, created_at)` | ✅ |
+| `idempotency_keys` | `venue_id`, `endpoint`, `key`, `fingerprint`, `in_progress`, `status_code`, `response_body jsonb` | pk `(venue_id, endpoint, key)`, `(created_at)` for TTL purge | ✅ |
+| `outbox` | identical shape to `catalog_db.outbox` — one relay implementation (`pkg/outbox`) serves both | partial `(next_attempt_at, occurred_at) WHERE sent_at IS NULL` | ✅ |
+| `order_events` | transition log: `order_id`, `from_status`, `to_status`, `actor_type`, `actor_id`, `reason`, `created_at` | `(order_id, created_at)` | ❌ **not implemented** — FR-A4 audit trail has no storage yet |
+
+The **partial unique indexes** are what make "one open session per table" and "one open
+service request per (table, type)" database guarantees rather than application hopes.
+
+Order numbering: inside the order transaction, an upsert on `order_number_counters`
+returns and increments `next_seq`, serialised per venue-day. No advisory locks, no gaps in
+the common path. `business_date` is derived from the venue timezone and
+`business_day_cutoff_minute`, so a venue that closes at 03:30 keeps one shift on one
+business day (edge case 27).
+
+Snapshots on `order_items` / `order_item_modifiers` (`name`, `unit_price_minor`,
+`price_delta_minor`) make order history immutable and independent of later menu edits.
+`menu_item_id` and `option_id` are kept for analytics only — they are never re-resolved.
+
+### 9.3 `identity_db`
+
+| Table | Key columns | Notable indexes | Status |
+|---|---|---|---|
+| `staff` | `venue_id`, `name`, `email citext`, `password_hash`, `role`, `is_active` | `uniq(venue_id, email)`, `(venue_id)` | ✅ |
+| `refresh_tokens` | `staff_id`, `token_hash`, `issued_at`, `expires_at`, `revoked_at`, `replaced_by` | `uniq(token_hash)`, `(staff_id)`, `(expires_at)` for cleanup | ✅ |
+| `signing_keys` | `kid`, `kty`, `alg`, `public_jwk`, `is_active`, `retired_at` | partial `uniq(is_active) WHERE is_active` | ✅ |
+| lockout columns on `staff` (`failed_attempts`, `locked_until`) | — | — | ❌ **not implemented** — FR-A1 lockout has no storage yet |
+
+`signing_keys` stores **public JWK material only**. Private keys live in the secret store and
+are referenced by `kid` (§11.5) — deliberately unlike `venue_qr_keys.secret`, which is a
+server-only HMAC secret never handed to a client and therefore acceptable in the database.
+`replaced_by` makes refresh-token rotation a chain, so reuse of a rotated token is detectable
+and revokes the whole family.
+
+### 9.4 Transactions and migrations
+
+- **Transaction boundaries.** One aggregate per transaction: order + items + modifiers +
+  counter + idempotency row + outbox row commit together. Cross-service consistency is
+  eventual, via events; there is no distributed transaction anywhere in the system.
+- **Isolation.** `READ COMMITTED`. Order creation takes `SELECT ... FOR UPDATE` on the open
+  `table_session` row, which serialises concurrent submits from several phones at one table.
+- **Migrations.** `golang-migrate`, `NNNNNN_name.up.sql` / `.down.sql` per service, applied by
+  a Kubernetes Job (`deploy/k8s/migrate-job.yaml`) before the rollout.
+  Rules: additive first (add nullable column → backfill → constrain in a later release);
+  never drop a column in the same release that stops using it; no migration may hold an
+  exclusive lock longer than 1 s (`CREATE INDEX CONCURRENTLY`, `SET lock_timeout`).
+  `000004_business_day_cutoff` is the pattern to copy: a new column whose `DEFAULT` reproduces
+  the exact previous behaviour, so it deploys ahead of the code that reads it.
+- **Rollback.** Every migration has a tested `down`. Because migrations are additive, rolling
+  back the *application* never requires rolling back the *schema* — that is the supported
+  path; `down` exists for local development and emergencies.
+
+---
+
+## 10. State machines
+
+The order and item machines live as plain data in
+`services/order/internal/logic/orderservice/statemachine.go` and are covered by
+`statemachine_test.go`. This section and that file must not diverge.
+
+### 10.1 Order
+
+```mermaid
+stateDiagram-v2
+    [*] --> placed
+    placed --> accepted
+    placed --> cancelled
+    accepted --> in_progress
+    accepted --> ready: drinks poured on the spot
+    accepted --> cancelled
+    in_progress --> ready
+    in_progress --> cancelled
+    ready --> served
+    ready --> cancelled
+    served --> [*]
+    cancelled --> [*]
+```
+
+| Rule | Definition |
+|---|---|
+| Terminal states | `served`, `cancelled`. |
+| `accepted → ready` | Allowed, skipping `in_progress`: a drink poured immediately has no meaningful cooking phase, and FR-K3 lists "mark ready" as a ticket action, not a step that must follow "start". |
+| Cancellation | Allowed from **every** non-terminal state, including `ready`. Cancelling a ready dish is a real event (the party left, the guest refused it); a machine that forbids it pushes staff into marking food served that never was, which corrupts the day report far worse than an honest late cancellation. Reason required once cooking has started. See ADR-0008. |
+| Auto-derived | `deriveOrderStatus` moves an order to `ready` when every non-cancelled line is `ready`, and to `cancelled` when every line is cancelled (FR-K5). It only ever moves **forward** — it never pulls an order back off `ready` if a line is reopened, because the rule exists to save the kitchen a tap, not to override a human. |
+| Actors | Guest may only drive `placed → cancelled`, within `cancel_window_seconds` (default 60). All other transitions are staff-only; cancellation after cooking started is `manager`+ (§11.3). |
+| No-op | `from == to` is an idempotent success handled before the machine is consulted — a retried request must never read as a client error. |
+| Invalid | `409 INVALID_TRANSITION` carrying the current status. Never a silent no-op. |
+| FR-K8 recall | `served → ready` is **not** wired: it is a Should, and no RPC carries the recall intent. Adding it means a new RPC, not a machine edit. |
+
+### 10.2 Order item
+
+`placed → cooking → ready`, with `cancelled` reachable from `placed`, `cooking` and `ready`.
+`placed → ready` is allowed directly. There is no item-level `served`: delivery is an
+order-level fact. Item transitions drive order transitions, never the reverse.
+
+### 10.3 Table session
+
+`open → closed`. Opened by the first order, or by a service request at a table with no open
+session. Closed by staff with a `payment_method`; `closed_by_staff_id` and `closed_at` are
+recorded. Closing requires every order in the session to be `served` or `cancelled`,
+otherwise `409 SESSION_HAS_ACTIVE_ORDERS` (overridable by `manager` with a reason).
+A closed session rejects new orders from its guest sessions with `409 SESSION_CLOSED`;
+the guest UI then offers a rescan. `currency` is snapshotted at open time, so a venue
+currency change cannot rewrite an open bill.
+
+### 10.4 Service request
+
+`open → acknowledged → resolved`, and `open|acknowledged → expired` once `expires_at`
+passes (default 15 min, venue-configurable), applied by a periodic job.
+Creating a request while one of the same type is `open` returns the **existing** request
+with `200`, not `201` — which is what makes a guest's repeated taps harmless.
+
+---
+
+## 11. Non-functional requirements
+
+### 11.1 Performance and capacity
+
+| Metric | Target (p95) | Notes |
+|---|---|---|
+| Guest menu first contentful paint on 4G | < 1.5 s | Menu JSON < 150 KB gzipped; images lazy, WebP, ≤ 60 KB each |
+| `GET /guest/menu` server time | < 120 ms | Redis-cached by `(venue_id, locale, menu_version)`, TTL 5 min, invalidated by a `menu_version` bump |
+| `POST /guest/orders` server time | < 500 ms | Includes the `catalog.ResolveOrderItems` round-trip |
+| Submit → ticket visible on KDS | < 2 s | End-to-end, alerted on |
+| KDS action → confirmed | < 300 ms | |
+| Capacity (pilot) | 20 venues, 1000 tables, 600 orders/hour aggregate | Sizing headroom ×10 |
+| Gateway concurrent WebSockets | 2000 per pod, 3 pods minimum | |
+
+### 11.2 Availability and degradation
+
+Target 99.5% monthly for the guest path during venue working hours.
+
+| Failure | Behaviour |
+|---|---|
+| `catalog` down | Menu served from Redis cache if warm; new orders rejected with `503 CATALOG_UNAVAILABLE` and a clear message; KDS fully functional on existing orders |
+| `order` down | Menu browsable; ordering and KDS actions unavailable behind an explicit banner; the client keeps the cart |
+| Kafka down | Writes succeed — the outbox buffers and `next_attempt_at` backs off; realtime push stops; KDS falls back to 10 s polling; events flush on recovery |
+| Redis down | Rate limiting fails **closed** for guest ordering (protecting the kitchen is worth more than an order); menu cache misses fall through to Postgres |
+| Guest offline | Cart preserved in localStorage; submit disabled behind an offline indicator |
+| KDS offline | Last ticket state stays readable; actions queue locally with idempotency keys and replay on reconnect; server state wins on conflict and the screen shows what changed |
+
+Kafka is deliberately **not** a readiness dependency: a broker outage must not remove
+serving pods from the load balancer.
+
+### 11.3 Security
+
+**Authentication.**
+- Guest: RS256 JWT, `aud=guest`, TTL 4 h, claims `venue_id`, `table_id`, `table_session_id`,
+  `sid` (= `guest_sessions.id`). Stored in `sessionStorage`, not a cookie — which removes
+  CSRF from the guest path entirely. No refresh; expiry means rescanning the QR.
+- Staff: access JWT 15 min + rotating refresh token 30 d. Refresh lives in an
+  `HttpOnly; Secure; SameSite=Strict` cookie; `refresh_tokens.replaced_by` makes reuse of a
+  rotated token detectable and revokes the whole family. Passwords: Argon2id
+  (m=64 MiB, t=3, p=2), minimum 12 characters, checked against a breached-password list.
+  *Lockout after 10 failed attempts for 15 minutes is specified but not yet implemented —
+  see the gap in §9.3.*
+- The gateway verifies JWTs **offline** against JWKS from `identity` (cached 10 min), so an
+  `identity` outage cannot take down authenticated traffic.
+
+**Authorisation (RBAC).**
+
+| Capability | guest | cook | waiter | manager | admin |
+|---|---|---|---|---|---|
+| Read own table's orders and bill | ✅ | — | — | — | — |
+| Place order / service request | ✅ | — | — | — | — |
+| Cancel own order inside the window | ✅ | — | — | — | — |
+| View KDS tickets | — | ✅ | ✅ | ✅ | ✅ |
+| Item and order cooking transitions | — | ✅ | ✅ | ✅ | ✅ |
+| Toggle stop-list | — | ✅ | — | ✅ | ✅ |
+| Mark served, acknowledge service requests | — | — | ✅ | ✅ | ✅ |
+| Close bill / table session | — | — | ✅ | ✅ | ✅ |
+| Cancel after cooking started | — | — | — | ✅ | ✅ |
+| Menu and price editing | — | — | — | ✅ | ✅ |
+| Staff, venue settings, QR key rotation | — | — | — | — | ✅ |
+
+Every authorisation decision additionally checks that the resource's `venue_id` equals the
+token's `venue_id`. Cross-venue access returns `404`, never `403` — no existence disclosure.
+Role checks are enforced in the gateway middleware **and** re-checked in the owning service:
+a service must never trust a caller's claim about who it is.
+
+**QR / table-token security (mitigates R1).**
+- The QR encodes `https://<host>/t/{venue_slug}/{table_code}?s={sig}`, where `sig` is an
+  HMAC-SHA256 over `venue_id|table_id|key_version` using `venue_qr_keys.secret`.
+- `table_code` is ≥ 10 random URL-safe characters (DB `CHECK`), unique per venue — never the
+  table number, so codes are not guessable.
+- Key rotation writes a new `venue_qr_keys` row and stamps `expires_at` on the old one
+  (default 30-day grace, FR-T4). Use of a legacy key increments a metric so staff know
+  reprints are outstanding.
+- Rate limits (Redis, go-zero `periodlimit`): guest-session issue 10/min per IP; order submit
+  5 per 10 min per guest session and 20 per 10 min per table; service requests 1 per type per
+  2 min per table; 60 req/min per session overall.
+- Venue setting `require_staff_confirmation` (default **on** for the pilot) keeps a human
+  between a remote troll order and the kitchen.
+
+**Transport and headers.** TLS 1.2+ at the ingress, HSTS, CSP without `unsafe-inline`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
+strict per-venue CORS allowlist. Internal gRPC runs inside a `NetworkPolicy`-fenced namespace
+(`deploy/k8s/networkpolicy.yaml`); **mTLS between services is a known gap** until a mesh or
+per-service certificates land.
+
+**Input handling.** Validated at the gateway against the schema *and* re-validated in the
+owning service, with the hard limits also expressed as DB `CHECK` constraints (`qty 1..99`,
+`comment ≤ 200`, all money `>= 0`) so no code path can write an impossible row.
+Parameterised SQL only. Uploaded images are MIME-sniffed, capped at 5 MB, re-encoded
+server-side (stripping EXIF including GPS) and stored under a random MinIO key.
+
+### 11.4 Privacy
+
+- No name, phone, email or payment data is collected from guests in Release 1.
+- Guest sessions store no IP or User-Agent today. If abuse control later needs them, they are
+  stored **hashed** (HMAC with a rotating salt), retained 30 days — and nothing else.
+- Order data is retained 12 months, then aggregated and the raw rows deleted.
+- Logs never contain tokens, `Authorization` headers, cookies, or `venue_qr_keys.secret`;
+  a redaction middleware enforces this and is unit-tested.
+- No third-party analytics or trackers on the guest page.
+
+### 11.5 Secrets
+
+All secrets arrive as environment variables from Kubernetes Secrets
+(`deploy/k8s/secrets.example.yaml` is a placeholder template — the real values never enter
+the repository). JWT private keys live in the secret store and are referenced by `kid`;
+`signing_keys` holds public JWK material only. `.env.example` carries placeholders
+(`<DB_PASSWORD>`, `<JWT_PRIVATE_KEY_REF>`, `<HMAC_KEY>`). CI runs secret scanning on every
+push. **This repository is public — treat every commit as published forever.**
+
+### 11.6 Observability
+
+- **Logs**: structured JSON via go-zero `logx`, every line carrying `trace_id`, `venue_id`,
+  `service`, `endpoint`. No PII (§11.4).
+- **Metrics** (Prometheus): RED per endpoint and per gRPC method, plus product SLIs —
+  `order_submit_total{result}`, `order_submit_duration_seconds`,
+  `ticket_visible_delay_seconds`, `time_to_accept_seconds`, `cook_duration_seconds`,
+  `service_request_ack_seconds`, `ws_connections`, `kafka_consumer_lag`, `outbox_pending`,
+  `outbox_attempts`, `dlq_depth`, `qr_legacy_key_used`.
+- **Tracing**: OpenTelemetry, W3C `traceparent` propagated browser → gateway → gRPC → Kafka
+  headers (`trace_id` is a first-class outbox column) → consumer. 100% sampling in the pilot.
+- **Correlation**: the gateway generates `X-Request-Id` when absent and returns it in every
+  response and error envelope, so a guest complaint maps to a trace in one lookup.
+- **Health**: `/healthz` (liveness, no dependencies) and `/readyz` (Postgres, Redis, required
+  gRPC clients — not Kafka), implemented once in `pkg/health`.
+- **Alerts**: order submit error rate > 2% for 5 min; ticket delay p95 > 5 s; DLQ depth > 0;
+  `outbox_pending` > 100 for 2 min; consumer lag > 1000; 5xx > 1%; WebSocket disconnect storm.
+
+### 11.7 Frontend requirements
+
+- **Guest**: React + Vite PWA, mobile-first, first load ≤ 200 KB JS gzipped, iOS Safari 15+
+  and Chrome 100+, venue-configured locales, WCAG 2.1 AA (contrast, visible focus, touch
+  targets ≥ 44 px, labelled controls).
+- **KDS**: built for a 10" tablet in landscape — high contrast, ≥ 18 px base font, one tap per
+  action, confirmation on destructive actions, wake-lock to keep the screen on, explicit
+  offline banner.
+- **Admin**: desktop-first, optimistic updates with rollback on error, unsaved-changes guard.
+
+---
+
+## 12. Edge cases and negative scenarios
+
+Acceptance-relevant: each row must have a test (§13).
+
+### 12.1 QR and session
+
+| # | Scenario | Required behaviour |
+|---|---|---|
+| 1 | Invalid or tampered `sig` | `401 INVALID_TABLE_TOKEN`, generic message, logged with the table code |
+| 2 | QR of a deactivated table | `409 TABLE_INACTIVE`, "please ask a staff member" |
+| 3 | QR signed with a rotated key inside the grace period | Works, and increments `qr_legacy_key_used` so staff know reprints are outstanding |
+| 4 | QR signed with a key past `expires_at` | `401`; the guest sees "this QR is out of date" |
+| 5 | Guest JWT expires mid-session | `401 TOKEN_EXPIRED`; the page silently re-runs the QR exchange from the stored link and retries once |
+| 6 | Two phones at one table | Both join the same `table_session`; each sees the whole table bill but may cancel only its own orders |
+| 7 | Staff closes the bill while a guest is mid-cart | `409 SESSION_CLOSED`; the cart survives and the guest is offered a rescan |
+
+### 12.2 Ordering and concurrency
+
+| # | Scenario | Required behaviour |
+|---|---|---|
+| 8 | Two phones submit simultaneously at one table | Both succeed; `SELECT FOR UPDATE` on the session serialises `order_number_counters`; no duplicate number |
+| 9 | Network retry of the same submit | Same `Idempotency-Key` → exactly one order, the original response replayed |
+| 10 | Same key, different body | `409 IDEMPOTENCY_KEY_REUSED` (fingerprint mismatch); nothing written |
+| 11 | Retry while the first request is still running | `in_progress = true` → `409 REQUEST_IN_PROGRESS`; the client backs off |
+| 12 | Item goes on the stop-list between menu load and submit | `409 ITEMS_UNAVAILABLE` listing exactly those items; nothing written; no partial acceptance |
+| 13 | Price changed between menu load and submit | `409 PRICE_CHANGED` with new totals; the guest re-confirms; the server price always wins |
+| 14 | Client sends a price or a total | Ignored entirely; a test asserts a forged price cannot influence the stored order |
+| 15 | Modifier selection violates `min_select`/`max_select` | `422 VALIDATION_FAILED` naming the group |
+| 16 | Item belongs to another venue | `404` — no cross-tenant existence disclosure |
+| 17 | 60 items, or qty 500, or a 5 KB comment | `422` against FR-O5 limits, which are also DB `CHECK`s |
+| 18 | Guest cancels at the same moment the cook accepts | One transaction wins under a status guard; the loser gets `409 INVALID_TRANSITION` with the current status |
+| 19 | Negative modifier makes a line total negative | Rejected by the domain and by `CHECK (line_total_minor >= 0)` |
+| 20 | Venue currency differs from the session currency | Impossible by construction: `table_sessions.currency` is snapshotted at open time |
+
+### 12.3 Kitchen and realtime
+
+| # | Scenario | Required behaviour |
+|---|---|---|
+| 21 | KDS offline for 3 minutes | Offline banner; queued actions replay with idempotency keys; server state wins and the screen shows what changed |
+| 22 | Two cooks tap "ready" on the same item | Both get `200` — `from == to` is an idempotent success, never a `409` |
+| 23 | Cancel a `ready` item | Allowed (ADR-0008); reason required; the order auto-cancels only if *every* line is cancelled |
+| 24 | Last live line goes `ready` | `deriveOrderStatus` moves the order to `ready` in the same transaction |
+| 25 | A line is reopened after the order reached `ready` | The order stays `ready` — the derive rule only moves forward |
+| 26 | Kafka consumer restarts and replays | No duplicate WS pushes (dedupe by `event_id`), no duplicate DB writes |
+| 27 | Events arrive out of order across keys | State-machine guards reject stale transitions; `occurred_at` breaks ties |
+| 28 | Gateway pod dies holding 500 sockets | Clients reconnect with jittered backoff and re-fetch over REST; jitter is tested to avoid a thundering herd |
+| 29 | Ticket passes `kds_red_threshold_seconds` | Escalated visually and counted for the alert |
+
+### 12.4 Data and operations
+
+| # | Scenario | Required behaviour |
+|---|---|---|
+| 30 | Business day rolls over at 04:00 local | `business_day_cutoff_minute` keeps one shift on one business date; numbering restarts only at the cutoff |
+| 31 | Menu item deleted while historical orders reference it | Orders render from snapshots, forever |
+| 32 | Outbox relay stalls | `outbox_pending` alerts; `next_attempt_at` backs off instead of hot-looping; nothing is lost |
+| 33 | A message lands in the DLQ | Alert; runbook: inspect, fix, replay with the documented command |
+| 34 | Migration fails mid-rollout | The pre-upgrade Job fails, the rollout never starts, the previous version keeps serving |
+| 35 | Two relay replicas pick the same outbox row | Row-level locking (`FOR UPDATE SKIP LOCKED`) makes double publication impossible; duplicates remain harmless by §8.3 |
+
+---
+
+## 13. Testing and acceptance
+
+| Layer | Scope | Tooling |
+|---|---|---|
+| Unit | State machines (table-driven over every from/to pair), pricing and modifier maths, business-day derivation, QR signature verify, redaction middleware | `go test -race` |
+| Repository | SQL, indexes, partial-unique constraints, `FOR UPDATE` behaviour, migrations up **and** down | Real Postgres in CI (`make migrate-up` before tests) |
+| Contract | `buf lint` and `buf breaking --against '.git#branch=main'` on every PR | CI job `buf` |
+| Manifests | `kubeconform` over rendered kustomize output, plus a check that no real credential is committed | CI job `k8s` |
+| Integration | Full flows across gateway + services + Postgres + Redis + Kafka; CI asserts these tests were **not** skipped | `docker compose` + a skip-guard step |
+| Concurrency | Scenarios 8, 9, 11, 18, 22, 35 run with N goroutines and asserted invariants | `go test -race`, repeated runs |
+| E2E | Scan → order → KDS → ready → served → bill; waiter call; stop-list race | Playwright against the compose stack |
+| Load | 500 concurrent guest sessions, 2000 WebSockets, 60 orders/min burst | k6 |
+| Security | Cross-tenant access, forged prices, tampered QR, rate-limit bypass, JWT `alg=none` / expired / other-venue, XSS in comments and item names | Automated suite + a security review before release |
+
+The CI skip-guard deserves its own line: an integration test that silently skips because a
+dependency was missing is worse than no test, because it reports green. CI fails if the
+integration tests did not actually run.
+
+**Definition of done for Release 1** — all of:
+1. Every `M`-priority FR implemented and covered by at least one automated test.
+2. Every scenario in §12 has a passing test.
+3. The three ❌ gaps in §9 (order audit log, staff lockout) are either closed or explicitly
+   deferred with the user's agreement.
+4. p95 targets in §11.1 met under the k6 profile.
+5. Dashboards and the §11.6 alerts exist and have fired at least once in staging.
+6. Runbooks written: DLQ replay, outbox stall, QR key rotation, restoring a venue's menu.
+7. Secret scanning, `buf breaking` and `kubeconform` green; no `HIGH`+ security findings.
+8. A one-day live pilot in one venue with a documented paper fallback.
+
+---
+
+## 14. Deployment and environments
+
+| Environment | Purpose | Data |
+|---|---|---|
+| `local` | `make infra-up` (Postgres, Redis, etcd, Kafka, MinIO) + `make run-*` per service | Seed fixtures |
+| `staging` | K8s namespace, one replica each, test domain | Anonymised seed only — never production data |
+| `production` | K8s on bare metal, HPA on the gateway | Real |
+
+- **Discovery**: etcd, in local development and in the cluster alike
+  (`etcd.qrmenu.svc.cluster.local:2379`, keys `catalog.rpc` / `order.rpc` / `identity.rpc`),
+  with `NonBlock: true` so a slow dependency cannot stall startup. See ADR-0002.
+- **Images**: per-service Dockerfiles built and pushed to GHCR by `.github/workflows/docker.yml`
+  on `main` and tags; non-root, pinned base images.
+- **Manifests**: `deploy/k8s/` — namespace, ConfigMaps, per-service Deployments and Services,
+  `migrate-job.yaml`, `poddisruptionbudgets.yaml`, `networkpolicy.yaml`,
+  `secrets.example.yaml` (placeholders only), assembled by `kustomization.yaml`.
+- **Probes**: liveness `/healthz` (no dependencies), readiness `/readyz` (Postgres, Redis,
+  gRPC clients — never Kafka), both from `pkg/health`.
+- **Rollout**: `maxUnavailable: 0, maxSurge: 1`, `PodDisruptionBudget minAvailable: 1`,
+  requests and limits set on every container, `terminationGracePeriodSeconds: 30`.
+  On SIGTERM the gateway stops accepting connections, sends a `going_away` close frame so
+  clients reconnect elsewhere, and drains in-flight requests.
+- **Migrations**: run as a Job before the rollout; a failure stops the deploy.
+- **Config**: `services/*/etc/*.yaml` per go-zero convention, overridden by ConfigMaps and
+  Secrets in the cluster. No secret in any committed file.
+- **Storage**: Postgres PVC with daily base backup and WAL archiving to MinIO; a restore
+  drill is required before the pilot. MinIO bucket versioning on for menu images.
+- **CI** (`.github/workflows/ci.yml`): gofmt → `go vet` → build → `go test ./... -race -cover`
+  against a real Postgres with migrations applied → skip-guard → `golangci-lint` →
+  `kubeconform` + credential check → `buf lint` / `buf breaking`.
+- **Rollback**: redeploy the previous image tag. Safe because migrations are additive and the
+  previous application version tolerates the newer schema.
+
+---
+
+## 15. Roadmap
+
+| Milestone | Content | Status |
+|---|---|---|
+| **M0 — Foundation** | Repo layout, buf + goctl codegen, proto v1, docker compose, CI, migration tooling | ✅ done |
+| **M1 — Services** | identity (staff auth, guest tokens, JWKS), catalog (menu, tables, QR signing, modifiers), order (orders, state machine, outbox relay), gateway (REST, WebSocket push, Kafka consumer) | ✅ done |
+| **M2 — Platform** | Kubernetes manifests, health probes, metrics, contract-gap fixes | ✅ done |
+| **M3 — Frontends** | `web/guest`, `web/kds`, `web/admin` | ⬜ next |
+| **M4 — Gap closure** | Order audit log (FR-A4), staff lockout (FR-A1), availability windows (FR-C7), mTLS between services | ⬜ |
+| **M5 — Hardening** | Load and security testing, dashboards, alerts, runbooks, backup/restore drill | ⬜ |
+| **M6 — Pilot** | One venue, staff training, paper fallback, daily review | ⬜ |
+
+**Release 2 candidates (not committed):** online payment and refunds, tips, split bill,
+takeaway with pickup slots, POS and fiscal integration, loyalty, multi-station KDS routing,
+chain-level reporting, native apps, guest order history, reusable modifier groups (ADR-0007).
+Extraction triggers: a `notification` service once push or SMS appears; a `payment` service on
+day one of Release 2 (never inside `order`); a `reporting` service once report queries start
+affecting ordering latency.
+
+---
+
+## 16. Open questions
+
+| # | Question | Blocks | Default if unanswered |
+|---|---|---|---|
+| Q1 | Is fiscalization / a legal receipt required in the pilot country? | Pilot go-live, Release 2 payment design | Assume not required (A4) |
+| Q2 | Which locales does the pilot venue need? | Menu content, UI | `ru` + `en` |
+| Q3 | Should `require_staff_confirmation` be on (a waiter accepts before the kitchen sees the ticket)? | Kitchen flow, R1 mitigation | On |
+| Q4 | Service charge: fixed, optional, or none? | Bill maths (`service_charge_bps`) | Venue setting, default 0 |
+| Q5 | Should the guest see queue position or an ETA? | Guest UI, KDS data | Not in R1 |
+| Q6 | Shared-tablet PIN login for the kitchen instead of email + password? | Identity design | Email + password |
+| Q7 | Is paper ticket printing needed as a pilot fallback? | Possible ESC/POS integration | No — the fallback is manual |
+| Q8 | Managed or self-hosted Kafka/Postgres? | Ops effort, backup design | Self-hosted on the existing cluster |
+| Q9 | Are the §9 gaps (order audit log, staff lockout) required for the pilot? | M4 scope | Required before a real venue |
+
+---
+
+## 17. Architecture decision records
+
+Full text in `docs/adr/`.
+
+| ADR | Decision | Status |
+|---|---|---|
+| [ADR-0001](adr/0001-microservices-from-day-one.md) | Microservices from day one: `gateway`, `catalog`, `order`, `identity` | Accepted |
+| [ADR-0002](adr/0002-service-discovery.md) | etcd for service discovery, in local development and in the cluster | Accepted |
+| [ADR-0003](adr/0003-realtime-fanout.md) | Kafka for durable events; per-pod consumer groups in the gateway for WebSocket fan-out | Accepted |
+| [ADR-0004](adr/0004-transactional-outbox.md) | Transactional outbox for event publication | Accepted |
+| [ADR-0005](adr/0005-price-snapshots.md) | Server-resolved prices with snapshots on order items | Accepted |
+| [ADR-0006](adr/0006-no-online-payments-in-r1.md) | No online payments in Release 1 | Accepted |
+| [ADR-0007](adr/0007-modifier-group-ownership.md) | A modifier group belongs to exactly one menu item | Accepted |
+| [ADR-0008](adr/0008-cancellation-from-any-state.md) | Cancellation allowed from every non-terminal state | Accepted |
