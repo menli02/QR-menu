@@ -119,7 +119,9 @@ jobs:
 
       # Pinned to the version validated locally against this codebase
       # (0 issues on default linters). Bump deliberately, not silently.
-      - uses: golangci/golangci-lint-action@v6
+      # The action major must track the linter major: v6 refuses a v2
+      # linter outright ("golangci-lint v2 is not supported").
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.6.2
 

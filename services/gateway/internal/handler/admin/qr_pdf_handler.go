@@ -138,6 +138,15 @@ func renderQRSheet(baseURL string, codes *v1_catalogpb.GetTablePrintCodesRespons
 	// produces a different file every call, which defeats any caching or
 	// diffing downstream and makes the endpoint untestable by comparison.
 	pdf.SetCreationDate(fixedPDFDate())
+	// ModDate is written from the clock unless it is pinned too, so two
+	// renders that straddle a second boundary differ — a rare flake rather
+	// than an obvious failure, which is worse.
+	pdf.SetModificationDate(fixedPDFDate())
+	// Fonts need their own fix: fpdf numbers font objects by ranging over an
+	// internal map, so Helvetica and Helvetica-Bold land in either order and
+	// the bytes differ about half the time even though the rendered page is
+	// identical. SetCatalogSort orders the resource catalogs.
+	pdf.SetCatalogSort(true)
 
 	cardW := (pageWidthMM - 2*marginMM) / cardsPerRow
 	cardH := (pageHeightMM - 2*marginMM) / cardsPerCol
